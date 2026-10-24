@@ -41,6 +41,10 @@ core_registry_parse_file() {
     case "${data[REQUIRES_BOOT]-false}" in true|false) ;; *) core_log "REQUIRES_BOOT non valido: $id"; return 1;; esac
     for dep in ${data[DEPENDENCIES]-}; do [[ "$dep" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { core_log "dipendenza non valida: $id -> $dep"; return 1; }; done
     if [ -n "${data[SERVICE_UNIT]-}" ]; then [[ "${data[SERVICE_UNIT]}" =~ ^[a-zA-Z0-9_.@-]+\.service$ ]] || return 1; fi
+    case "${data[TYPE]}:${data[BOOT_PHASE]-normal}" in
+        task:early|task:normal|service:service) : ;;
+        *) core_log "combinazione TYPE/BOOT_PHASE non supportata: $id"; return 1;;
+    esac
     [ "${data[TYPE]}" != service ] || { [ "${data[RUN_POLICY]}" = always ] && [ -n "${data[SERVICE_UNIT]-}" ] || { core_log "servizio incoerente: $id"; return 1; }; }
     for path in ${data[OWNED_PATHS]-}; do
         [[ "$path" = /* && "$path" != *'..'* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] || { core_log "OWNED_PATHS non valido: $id"; return 1; }
@@ -53,8 +57,9 @@ core_registry_parse_file() {
 }
 
 core_registry_validate_owned_paths() {
-    local id path other other_path a b
+    local id path other other_path a b unit service_path
     declare -A owners=()
+    declare -A service_units=()
     for id in "${CORE_MODULE_IDS[@]}"; do
         for path in $(core_registry_field "$id" 10); do
             [ "$path" != / ] || { core_log "OWNED_PATHS non può essere /"; return 1; }
@@ -66,6 +71,13 @@ core_registry_validate_owned_paths() {
             [ -z "${owners[$path]+x}" ] || { core_log "ownership duplicata: $path"; return 1; }
             owners[$path]=$id
         done
+        if [ "$(core_registry_field "$id" 2)" = service ]; then
+            unit=$(core_registry_field "$id" 7); service_path="/etc/systemd/system/$unit"
+            case "$unit" in ps5-tools-early.service|ps5-tools-boot.service) core_log "unit riservata al core: $id/$unit"; return 1;; esac
+            [ -z "${service_units[$unit]+x}" ] || { core_log "SERVICE_UNIT duplicata: $unit"; return 1; }
+            service_units[$unit]=$id
+            case " $(core_registry_field "$id" 10) " in *" $service_path "*) : ;; *) core_log "unit non inclusa in OWNED_PATHS: $id/$unit"; return 1;; esac
+        fi
     done
     for path in "${!owners[@]}"; do
         for other in "${!owners[@]}"; do
@@ -119,12 +131,15 @@ core_registry_field() {
     printf '%s\n' "${fields[$index]-}"
 }
 core_registry_validate_dependencies() {
-    local id dep deps
+    local id dep deps type phase dep_type dep_phase
     for id in "${CORE_MODULE_IDS[@]}"; do
         deps=$(core_registry_field "$id" 6)
+        type=$(core_registry_field "$id" 2); phase=$(core_registry_field "$id" 4)
         for dep in $deps; do
             [ "${CORE_MODULE[$dep]+x}" = x ] || { core_log "$id: dipendenza sconosciuta: $dep"; return 1; }
-            [ "$(core_registry_field "$id" 4)" = early ] && [ "$(core_registry_field "$dep" 4)" = normal ] && { core_log "$id: dipendenza normal da fase early"; return 1; }
+            dep_type=$(core_registry_field "$dep" 2); dep_phase=$(core_registry_field "$dep" 4)
+            [ "$phase" != early ] || [ "$dep_phase" = early ] || { core_log "$id: dipendenza non disponibile nella fase early: $dep"; return 1; }
+            [ "$type" != service ] || [ "$dep_type" = service ] || { core_log "$id: service dipende da task non disponibile: $dep"; return 1; }
             [ "$(core_registry_field "$dep" 2)" != service ] || [ -n "$(core_registry_field "$dep" 7)" ] || { core_log "$id: dipendenza service senza unit"; return 1; }
         done
     done

@@ -24,6 +24,7 @@ core_registry_selection_order() {
     local requested=${1-} id dep
     local -a ordered=()
     [ -z "$requested" ] && { core_registry_order; return; }
+    [ "${CORE_MODULE[$requested]+x}" = x ] || { core_log "modulo richiesto sconosciuto: $requested"; return 1; }
     declare -A selected=()
     core_registry_select_recursive() {
         local current=$1 dependency
@@ -32,7 +33,10 @@ core_registry_selection_order() {
         for dependency in $(core_registry_field "$current" 6); do core_registry_select_recursive "$dependency" || return 1; done
     }
     core_registry_select_recursive "$requested" || return 1
-    mapfile -t ordered < <(core_registry_order) || return 1
+    local order_output
+    order_output=$(core_registry_order) || return 1
+    [ -n "$order_output" ] || { core_log 'ordinamento vuoto'; return 1; }
+    mapfile -t ordered <<< "$order_output" || return 1
     for id in "${ordered[@]}"; do
         [ -n "${selected[$id]+x}" ] || continue
         printf '%s\n' "$id"

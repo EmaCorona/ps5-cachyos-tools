@@ -36,7 +36,9 @@ Dopo un'installazione offline o live la CLI generale è disponibile anche come `
 
 `--root` richiede una rootfs già montata, diversa da `/`; in modalità offline il runner e le unit vengono copiati soltanto nel target e nessun hook di boot viene eseguito sul PC. `--live` è esplicito e opera sulla root avviata; `check --live` esegue i check disponibili sulla root corrente. Il contratto dei manifest e degli hook è descritto in [docs/module-api.md](docs/module-api.md); l'architettura è in [docs/architecture.md](docs/architecture.md).
 
-`--boot` è opzionale e può indicare una partizione boot montata separatamente. Il framework non formatta partizioni e non deduce automaticamente l'associazione da un filesystem: la selezione dei mountpoint resta esplicita.
+`--boot` è opzionale e può indicare una partizione boot montata separatamente. Il framework non formatta partizioni e non deduce automaticamente l'associazione da un filesystem: la selezione dei mountpoint resta esplicita. I symlink finali arbitrari e le directory symlinkate verso l'host vengono rifiutati; sono ammessi soltanto i wants-link systemd previsti dal contratto.
+
+`--live` rifiuta un normale PC Linux se non rileva segnali PS5 affidabili. Per un ambiente di test controllato è possibile usare esplicitamente `PS5_TOOLS_ALLOW_LIVE=1`; l'installazione offline non richiede tale riconoscimento.
 
 Il modulo `lib/modules/fan.sh` può essere chiamato da un orchestratore oppure direttamente:
 

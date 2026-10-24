@@ -14,6 +14,35 @@ module_fan_manifest_path() { echo "$1/etc/ps5-fan/.ps5-cachyos-tools.manifest"; 
 module_fan_manifest_text() { printf '%s\n' /usr/lib/ps5-cachyos-tools/fan.sh /usr/local/bin/ps5-fan /usr/local/bin/ps5-fan-daemon /usr/local/bin/ps5-temp /etc/systemd/system/ps5-fan-daemon.service /etc/udev/rules.d/99-ps5-fan.rules /etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service; }
 module_fan_all_paths() { module_fan_manifest_text; printf '%s\n' /etc/ps5-fan/.ps5-cachyos-tools.manifest; }
 
+module_fan_validate_write_path() {
+    local root=$1 path=$2 full=$1$2 part current target
+    current=${root%/}; [ -n "$current" ] || current=/; target="$full"
+    [ "$root" = / ] && target="$path"
+    IFS=/ read -ra parts <<< "${path#/}"
+    for part in "${parts[@]}"; do
+        [ -n "$part" ] || continue
+        current="${current%/}/$part"
+        [ "$current" = "$target" ] && break
+        [ ! -L "$current" ] || { echo "fan: antenato symlink non autorizzato: $path" >&2; return 1; }
+    done
+    if [ -L "$full" ]; then
+        case "$path:$(readlink -- "$full")" in
+            /etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service:/etc/systemd/system/ps5-fan-daemon.service) : ;;
+            *) echo "fan: artefatto finale symlink non autorizzato: $path" >&2; return 1;;
+        esac
+    fi
+}
+
+module_fan_validate_write_set() {
+    local root=$1 path
+    for path in /etc/ps5-fan /etc/ps5-fan/profiles /usr/lib/ps5-cachyos-tools /usr/local/bin /etc/systemd/system /etc/systemd/system/multi-user.target.wants /etc/udev/rules.d; do
+        module_fan_validate_write_path "$root" "$path" || return 1
+    done
+    for path in /etc/ps5-fan/.ps5-cachyos-tools.manifest /etc/ps5-fan/fan.conf /etc/ps5-fan/state /etc/ps5-fan/profiles/low.conf /etc/ps5-fan/profiles/balanced.conf /etc/ps5-fan/profiles/high.conf /usr/lib/ps5-cachyos-tools/fan.sh /usr/local/bin/ps5-fan /usr/local/bin/ps5-fan-daemon /usr/local/bin/ps5-temp /etc/systemd/system/ps5-fan-daemon.service /etc/udev/rules.d/99-ps5-fan.rules /etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service; do
+        module_fan_validate_write_path "$root" "$path" || return 1
+    done
+}
+
 module_fan_validate_artifact() {
     local root=$1 path=$2 full mode
     full=$root$path
@@ -204,7 +233,13 @@ module_fan_remove() {
 
 module_fan_run() {
     local root=${1:-}; [ -n "$root" ] && [ -d "$root" ] || { echo "fan: root filesystem non trovato" >&2; return 1; }
-    local repo_dir; repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+    module_fan_validate_write_set "$root" || return 1
+    local repo_dir
+    if [ -n "${CORE_REPO:-}" ] && [ -d "$CORE_REPO/config" ]; then
+        repo_dir=$CORE_REPO
+    else
+        repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+    fi
     local -a managed=(/etc/ps5-fan/.ps5-cachyos-tools.manifest /etc/ps5-fan/fan.conf /etc/ps5-fan/state /etc/ps5-fan/profiles/low.conf /etc/ps5-fan/profiles/balanced.conf /etc/ps5-fan/profiles/high.conf /usr/lib/ps5-cachyos-tools/fan.sh /usr/local/bin/ps5-fan /usr/local/bin/ps5-fan-daemon /usr/local/bin/ps5-temp /etc/systemd/system/ps5-fan-daemon.service /etc/udev/rules.d/99-ps5-fan.rules /etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service)
     local backup_state=BACKUP_NOT_REQUIRED backup_dir='' path profile active_before=0 enabled_before=0 runtime_changed=0 health_result=0 active_pid=0 health_pid=0 health_cycles=0 health_instance='' health_timeout=0 restart_required=0
     if [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then systemctl is-active --quiet ps5-fan-daemon.service && active_before=1 || active_before=0; systemctl is-enabled --quiet ps5-fan-daemon.service && enabled_before=1 || enabled_before=0; [ "$active_before" -eq 1 ] && active_pid=$(systemctl show -p MainPID --value ps5-fan-daemon.service 2>/dev/null || echo 0); [ -r /run/ps5-fan/runtime.state ] && health_cycles=$(awk -F= '$1=="cycles"{print $2}' /run/ps5-fan/runtime.state 2>/dev/null || echo 0); [ -r /run/ps5-fan/runtime.state ] && health_instance=$(awk -F= '$1=="instance_id"{print $2}' /run/ps5-fan/runtime.state 2>/dev/null || true); fi

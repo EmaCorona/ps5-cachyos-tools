@@ -15,7 +15,7 @@ source "$CORE_PREFIX/core/state.sh"
 runner_load_registry() { core_registry_discover "$CORE_MODULE_ROOT" >/dev/null && core_registry_validate_dependencies; }
 runner_lock() { mkdir -p "$CORE_RUN_ROOT/run/ps5-cachyos-tools"; exec 7>"$CORE_RUN_ROOT/run/ps5-cachyos-tools/transaction.lock"; flock -n 7 || { core_log 'transazione amministrativa già attiva'; return 1; }; exec 9>"$CORE_RUN_ROOT/run/ps5-cachyos-tools/runner.lock"; flock -n 9 || { core_log 'runner già attivo'; return 1; }; }
 runner_module() {
-    local id=$1 phase=$2 data enabled type policy boot_phase rev deps unit failure state boot hook rc request=0 request_file dep_policy dep_rev
+    local id=$1 phase=$2 data enabled type policy boot_phase rev deps unit failure state boot hook rc request=0 request_file dep_policy dep_rev request_id
     enabled=$(core_registry_field "$id" 1); type=$(core_registry_field "$id" 2); policy=$(core_registry_field "$id" 3); boot_phase=$(core_registry_field "$id" 4); rev=$(core_registry_field "$id" 5); deps=$(core_registry_field "$id" 6); unit=$(core_registry_field "$id" 7); failure=$(core_registry_field "$id" 8)
     [ -z "$CORE_REAPPLY_ID" ] || [ "$CORE_REAPPLY_ID" = "$id" ] || return 0
     request_file="$CORE_STATE_ROOT/var/lib/ps5-cachyos-tools/state/reapply/$id.request"
@@ -29,6 +29,15 @@ runner_module() {
     if [ "$request" -eq 0 ] && [ -z "$CORE_REAPPLY_ID" ] && [ "$policy" = once ] && [ "$(core_state_get "$CORE_STATE_ROOT" completed_at "$id")" -gt 0 ] 2>/dev/null; then
         [ "$(core_state_get "$CORE_STATE_ROOT" completed_revision "$id")" = "$rev" ] && return 0
         core_log "$id: revisione aggiornata, riesecuzione automatica sospesa; usare reapply/reset"
+        return 0
+    fi
+    request_id=$(awk -F= '$1=="requested_at"{print $2; exit}' "$request_file" 2>/dev/null || true)
+    if [ "$request" -eq 1 ] && [ -n "$request_id" ] &&
+       [ "$(core_state_get "$CORE_STATE_ROOT" status "$id")" = SUCCESS ] &&
+       [ "$(core_state_get "$CORE_STATE_ROOT" completed_revision "$id")" = "$rev" ] &&
+       [ "$(core_state_get "$CORE_STATE_ROOT" reapply_applied_id "$id")" = "$request_id" ]; then
+        rm -f -- "$request_file" || return 1
+        core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot" || return 1
         return 0
     fi
     [ "$request" -eq 1 ] || [ -n "$CORE_REAPPLY_ID" ] || [ "$(core_state_get "$CORE_STATE_ROOT" automatic_attempted_boot_id "$id")" != "$boot" ] || return 0
@@ -62,7 +71,7 @@ runner_module() {
                 core_log "$id: impossibile consumare la richiesta di reapply"; return 1
             fi
         fi
-    else core_state_write "$CORE_STATE_ROOT" "$id" FAILED "$policy" "$rev" "$rc" "$boot"; [ "$failure" = critical ] && return "$rc"; fi
+    else core_state_write "$CORE_STATE_ROOT" "$id" FAILED "$policy" "$rev" "$rc" "$boot" || return 1; [ "$failure" = critical ] && return "$rc"; fi
     return 0
 }
 main() { if [ "$(id -u)" -ne 0 ]; then case "${CORE_TEST_MODE:-0}:$CORE_STATE_ROOT:$CORE_RUN_ROOT" in 1:/tmp/ps5-tools-core.*:/tmp/ps5-tools-core.*) ;; *) core_log 'runner richiede root'; return 1;; esac; fi; local phase=${1:-normal} id order; case "$phase" in early|normal) ;; *) return 2;; esac; runner_lock || return 1; runner_load_registry || return 1; order=$(core_registry_order) || return 1; while IFS= read -r id; do [ -n "$id" ] || continue; runner_module "$id" "$phase" || return 1; done <<< "$order"; }

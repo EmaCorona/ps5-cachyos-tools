@@ -12,7 +12,7 @@ core_target_realpath() {
     [ -d "$path" ] || { core_die "target non trovato: $path"; return 1; }
     case "$path" in /*) ;; *) core_die 'target deve essere un percorso assoluto'; return 1;; esac
     current=/; IFS=/ read -ra parts <<< "${path#/}"
-    for part in "${parts[@]}"; do [ -n "$part" ] || continue; current="$current/$part"; [ ! -L "$current" ] || { core_die "antenato target symlink: $current"; return 1; }; done
+    for part in "${parts[@]}"; do [ -n "$part" ] || continue; current="${current%/}/$part"; [ ! -L "$current" ] || { core_die "antenato target symlink: $current"; return 1; }; done
     resolved=$(realpath -e -- "$path" 2>/dev/null) || { core_die "target non canonicalizzabile: $path"; return 1; }
     [ "$resolved" != / ] || { core_die 'modalità offline non può usare /; specificare --live'; return 1; }
     printf '%s\n' "$resolved"
@@ -50,7 +50,7 @@ core_target_validate_mount() {
     current=/; IFS=/ read -ra parts <<< "${path#/}"
     for part in "${parts[@]}"; do
         [ -n "$part" ] || continue
-        current="$current/$part"
+        current="${current%/}/$part"
         [ ! -L "$current" ] || { core_die "antenato $label symlink: $current"; return 1; }
     done
     [ "$(realpath -e -- "$path")" != / ] || { core_die "$label non può essere /"; return 1; }
@@ -86,14 +86,16 @@ core_target_prepare_dir() {
 }
 
 core_target_assert_parents() {
-    local root=$1 path=$2 part current resolved
+    local root=$1 path=$2 part current resolved target_path
     [[ "$path" = /* ]] || return 1
     current=${root%/}
+    [ -n "$current" ] || current=/
+    target_path="$root$path"; [ "$root" = / ] && target_path="$path"
     IFS=/ read -ra parts <<< "${path#/}"
     for part in "${parts[@]}"; do
         [ -n "$part" ] || continue
-        current="$current/$part"
-        [ "$current" = "$root$path" ] && break
+        current="${current%/}/$part"
+        [ "$current" = "$target_path" ] && break
         if [ -L "$current" ]; then
             [ "$root" = / ] || { core_die "symlink nell'antenato target: $current"; return 1; }
             resolved=$(realpath -m -- "$current") || return 1
@@ -108,6 +110,10 @@ core_target_validate_final() {
     core_target_assert_parents "$root" "$path" || return 1
     if [ -L "$full" ]; then
         link=$(readlink -- "$full") || return 1
+        case "$path:$link" in
+            /etc/systemd/system/multi-user.target.wants/*.service:/etc/systemd/system/*.service) : ;;
+            *) core_die "symlink finale non autorizzato: $path -> $link"; return 1;;
+        esac
         case "$link" in
             /*) target="$root$link";;
             *) target="$(dirname "$full")/$link";;
@@ -123,6 +129,12 @@ core_target_validate_live() {
     [ "$(id -u)" -eq 0 ] || { core_die 'modalità live richiede root'; return 1; }
     [ "$(realpath -e /)" = / ] || return 1
     [ -r /etc/os-release ] || { core_die 'sistema live senza etc/os-release'; return 1; }
+    if [ "${PS5_TOOLS_ALLOW_LIVE:-0}" != 1 ]; then
+        if ! grep -Eiq 'playstation|ps5' /sys/firmware/devicetree/base/model /sys/devices/virtual/dmi/id/product_name /etc/os-release 2>/dev/null &&
+           ! compgen -G '/sys/devices/platform/ps5*' >/dev/null && ! compgen -G '/dev/ps5*' >/dev/null; then
+            core_die 'ambiente live PS5 non riconosciuto; usare --root per offline oppure PS5_TOOLS_ALLOW_LIVE=1'; return 1
+        fi
+    fi
     printf '/\n'
 }
 

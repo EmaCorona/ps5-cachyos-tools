@@ -121,16 +121,31 @@ core_install_body() {
 }
 
 core_txn_snapshot() {
-    local root=$1 backup=$2 repo=$3 path id owned
+    local root=$1 backup=$2 repo=$3 requested=${4-} path id owned selected_order dir
     : > "$backup/.paths" || return 1
-    for path in /usr/lib/ps5-cachyos-tools /usr/local/bin/ps5-cachyos-tools /etc/systemd/system/ps5-tools-early.service /etc/systemd/system/ps5-tools-boot.service /etc/systemd/system/multi-user.target.wants/ps5-tools-early.service /etc/systemd/system/multi-user.target.wants/ps5-tools-boot.service /var/lib/ps5-cachyos-tools/install.identity; do
+    : > "$backup/.created-dirs" || return 1
+    for dir in /usr/lib/ps5-cachyos-tools /usr/lib/ps5-cachyos-tools/core /usr/lib/ps5-cachyos-tools/modules /usr/lib/ps5-cachyos-tools/systemd /usr/lib/ps5-cachyos-tools/lib /usr/lib/ps5-cachyos-tools/lib/modules /usr/lib/ps5-cachyos-tools/bin /usr/lib/ps5-cachyos-tools/config /usr/lib/ps5-cachyos-tools/config/profiles; do
+        [ -e "$root$dir" ] || printf '%s\n' "$dir" >> "$backup/.created-dirs" || return 1
+    done
+    for path in /usr/local/bin/ps5-cachyos-tools /usr/lib/ps5-cachyos-tools/boot-runner /usr/lib/ps5-cachyos-tools/bin/ps5-cachyos-tools /usr/lib/ps5-cachyos-tools/systemd/ps5-tools-early.service /usr/lib/ps5-cachyos-tools/systemd/ps5-tools-boot.service /etc/systemd/system/ps5-tools-early.service /etc/systemd/system/ps5-tools-boot.service /etc/systemd/system/multi-user.target.wants/ps5-tools-early.service /etc/systemd/system/multi-user.target.wants/ps5-tools-boot.service /var/lib/ps5-cachyos-tools/install.identity; do
         printf '%s\n' "$path" >> "$backup/.paths" || return 1
     done
+    for path in log.sh target.sh registry.sh dependencies.sh state.sh boot-runner.sh installer.sh service.sh; do
+        printf '%s\n' "/usr/lib/ps5-cachyos-tools/core/$path" >> "$backup/.paths" || return 1
+    done
     CORE_REGISTRY_ROOT="$repo/modules" core_registry_discover "$repo/modules" >/dev/null || return 1
-    for id in "${CORE_MODULE_IDS[@]}"; do
+    selected_order=$(core_registry_selection_order "$requested") || return 1
+    while IFS= read -r id; do
+        [ -n "$id" ] || continue
+        printf '%s\n' "/usr/lib/ps5-cachyos-tools/modules/$id" >> "$backup/.paths" || return 1
         owned=$(core_registry_field "$id" 10)
         for path in $owned; do printf '%s\n' "$path" >> "$backup/.paths" || return 1; done
-    done
+        if [ "$id" = fan ]; then
+            for path in /usr/lib/ps5-cachyos-tools/lib/modules/fan.sh /usr/lib/ps5-cachyos-tools/bin/ps5-fan /usr/lib/ps5-cachyos-tools/bin/ps5-fan-daemon /usr/lib/ps5-cachyos-tools/bin/ps5-temp /usr/lib/ps5-cachyos-tools/config/fan.conf /usr/lib/ps5-cachyos-tools/config/profiles/low.conf /usr/lib/ps5-cachyos-tools/config/profiles/balanced.conf /usr/lib/ps5-cachyos-tools/config/profiles/high.conf /usr/lib/ps5-cachyos-tools/systemd/ps5-fan-daemon.service /usr/lib/ps5-cachyos-tools/systemd/99-ps5-fan.rules; do
+                printf '%s\n' "$path" >> "$backup/.paths" || return 1
+            done
+        fi
+    done <<< "$selected_order"
     sort -u "$backup/.paths" -o "$backup/.paths" || return 1
     while IFS= read -r path; do
         [ -n "$path" ] || continue
@@ -144,7 +159,7 @@ core_txn_snapshot() {
 }
 
 core_txn_restore() {
-    local root=$1 backup=$2 path result=0
+    local root=$1 backup=$2 path dir result=0
     while IFS= read -r path; do
         [ -n "$path" ] || continue
         rm -rf -- "$root$path" || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-paths"; }
@@ -153,6 +168,12 @@ core_txn_restore() {
             cp -a -- "$backup$path" "$root$path" || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-paths"; }
         fi
     done < "$backup/.paths"
+    if [ -f "$backup/.created-dirs" ]; then
+        while IFS= read -r dir; do
+            [ -n "$dir" ] || continue
+            rmdir -- "$root$dir" 2>/dev/null || { [ ! -e "$root$dir" ] || result=1; }
+        done < <(sort -r "$backup/.created-dirs")
+    fi
     return "$result"
 }
 
@@ -179,16 +200,12 @@ core_install_preflight() {
 }
 
 core_install() {
-    local root=$1 backup path was_enabled=0 was_active=0 rollback_status=ROLLBACK_PARTIAL service_rollback_failed=0 filesystem_restore_failed=0
+    local root=$1 backup path rollback_status=ROLLBACK_PARTIAL service_rollback_failed=0 filesystem_restore_failed=0
     CORE_CONFIG_ROOT=${CORE_CONFIG_ROOT:-$root}
     core_install_preflight "$root" "$2" "${3-}" || return 1
     core_txn_lock "$root" || return 1
-    if [ "${CORE_INSTALL_MODE:-offline}" = live ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then
-        systemctl is-enabled --quiet ps5-tools-early.service && was_enabled=1 || true
-        systemctl is-active --quiet ps5-tools-early.service && was_active=1 || true
-    fi
     backup=$(mktemp -d "$root/.ps5-cachyos-tools-txn.XXXXXX") || return 1
-    core_txn_snapshot "$root" "$backup" "$2" || { core_log 'snapshot transazione fallito'; rm -rf -- "$backup"; return 1; }
+    core_txn_snapshot "$root" "$backup" "$2" "${3-}" || { core_log 'snapshot transazione fallito'; rm -rf -- "$backup"; return 1; }
     core_service_transaction_snapshot "$root" "${3-}" "$backup" || { core_log 'snapshot servizi fallito'; rm -rf -- "$backup"; return 1; }
     if core_install_body "$@"; then
         rm -rf -- "$backup"
@@ -203,9 +220,6 @@ core_install() {
     fi
     if [ "${CORE_INSTALL_MODE:-offline}" = live ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then
         core_service_transaction_restore "$root" "$backup" || service_rollback_failed=1
-        systemctl daemon-reload 2>/dev/null || service_rollback_failed=1
-        if [ "$was_enabled" -eq 1 ]; then systemctl enable ps5-tools-early.service ps5-tools-boot.service >/dev/null 2>&1 || service_rollback_failed=1; else systemctl disable ps5-tools-early.service ps5-tools-boot.service >/dev/null 2>&1 || service_rollback_failed=1; fi
-        if [ "$was_active" -eq 1 ]; then systemctl start ps5-tools-early.service >/dev/null 2>&1 || service_rollback_failed=1; else systemctl stop ps5-tools-early.service >/dev/null 2>&1 || service_rollback_failed=1; fi
     fi
     if [ "$service_rollback_failed" -ne 0 ]; then
         [ "$filesystem_restore_failed" -eq 0 ] && rollback_status=ROLLBACK_FILES_RESTORED_SERVICE_FAILED || rollback_status=ROLLBACK_FAILED

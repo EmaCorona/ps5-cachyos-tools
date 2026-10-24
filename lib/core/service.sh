@@ -162,7 +162,19 @@ core_service_module_install() {
     done
     core_service_install_file "$source" "$target" 644 "$managed" || return 1
     enabled=$(core_registry_field "$id" 1)
-    [ "$enabled" = true ] || return 0
+    if [ "$enabled" != true ]; then
+        if [ -L "$root/etc/systemd/system/multi-user.target.wants/$unit" ]; then
+            [ "$(readlink -- "$root/etc/systemd/system/multi-user.target.wants/$unit")" = "/etc/systemd/system/$unit" ] || return 1
+            rm -f -- "$root/etc/systemd/system/multi-user.target.wants/$unit" || return 1
+        elif [ -e "$root/etc/systemd/system/multi-user.target.wants/$unit" ]; then
+            return 1
+        fi
+        if [ "${CORE_INSTALL_MODE:-offline}" = live ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then
+            systemctl disable "$unit" || return 1
+            systemctl is-enabled --quiet "$unit" && { core_log "service ancora enabled: $unit"; return 1; } || true
+        fi
+        return 0
+    fi
     core_target_assert_parents "$root" "/etc/systemd/system/multi-user.target.wants" || return 1
     wants="$root/etc/systemd/system/multi-user.target.wants/$unit"
     core_service_enable_link "$wants" "/etc/systemd/system/$unit" || return 1

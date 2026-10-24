@@ -365,4 +365,19 @@ printf '#!/usr/bin/env bash\nprintf failure > "$1/etc/fixture-remove-failure"\ne
 if "$tmp/service-root/usr/local/bin/ps5-cachyos-tools" remove fixture-service --root "$tmp/service-root" >/tmp/ps5-tools-service-remove-fail.out 2>&1 && false || test -f "$tmp/service-root/etc/systemd/system/fixture-service.service"; then ok 'rollback remove conserva il service dopo hook fallito'; else no 'rollback remove non ha conservato il service'; fi
 printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/service-root/usr/lib/ps5-cachyos-tools/modules/fixture-service/remove.sh"; chmod 0755 "$tmp/service-root/usr/lib/ps5-cachyos-tools/modules/fixture-service/remove.sh"
 if "$tmp/service-root/usr/local/bin/ps5-cachyos-tools" remove fixture-service --root "$tmp/service-root" >/tmp/ps5-tools-service-remove.out 2>&1 && test ! -e "$tmp/service-root/etc/systemd/system/fixture-service.service" && test ! -e "$tmp/service-root/usr/lib/ps5-cachyos-tools/modules/fixture-service"; then ok 'rimozione generica del service completata'; else no 'rimozione generica del service fallita'; fi
+mkdir -p "$tmp/invalid-phase/task"; cat > "$tmp/invalid-phase/task/module.conf" <<'EOF'
+ID=task
+NAME=Invalid phase
+ENABLED=true
+TYPE=task
+RUN_POLICY=always
+BOOT_PHASE=service
+REVISION=1
+DEPENDENCIES=
+FAILURE_POLICY=continue
+EOF
+if core_registry_discover "$tmp/invalid-phase" >/dev/null 2>&1; then no 'manifest task/service accettato'; else ok 'manifest task/service rifiutato'; fi
+mkdir -p "$tmp/unsafe-link/etc/systemd/system/multi-user.target.wants" "$tmp/unsafe-link/outside"; printf sentinel > "$tmp/unsafe-link/outside/file"; ln -s "$tmp/unsafe-link/outside/file" "$tmp/unsafe-link/etc/systemd/system/multi-user.target.wants/evil.service"
+if core_target_validate_final "$tmp/unsafe-link" /etc/systemd/system/multi-user.target.wants/evil.service "$tmp/unsafe-link/etc/systemd/system/multi-user.target.wants/evil.service" >/dev/null 2>&1; then no 'symlink finale esterno accettato'; else grep -q '^sentinel$' "$tmp/unsafe-link/outside/file" && ok 'symlink finale esterno rifiutato senza seguire il target' || no 'sentinella symlink modificata'; fi
+if PS5_TOOLS_ALLOW_LIVE=0 core_target_validate_live >/dev/null 2>&1; then no 'live host non PS5 accettato'; else ok 'live host non PS5 rifiutato'; fi
 printf '%s\n' "$pass test superati, $fail falliti"; [ "$fail" -eq 0 ]
