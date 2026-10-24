@@ -83,6 +83,38 @@ module_fan_restore_copy() {
     mv -f -- "$tmp" "/proc/self/fd/$fd/$name"; rc=$?; [ "$rc" -eq 0 ] || rm -f -- "$tmp"; exec {fd}<&-; return "$rc"
 }
 
+module_fan_snapshot_copy() {
+    local root=$1 path=$2 destination=$3 parent fd name expected actual
+    module_fan_validate_write_path "$root" "$path" || return 1
+    parent=$(dirname "$path"); exec {fd}<"$root$parent" || return 1
+    expected=$(realpath -e -- "$root$parent") || { exec {fd}<&-; return 1; }
+    actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }
+    [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
+    name=$(basename "$path"); mkdir -p "$(dirname "$destination")" || { exec {fd}<&-; return 1; }
+    cp -a -- "/proc/self/fd/$fd/$name" "$destination"; local rc=$?; exec {fd}<&-; return "$rc"
+}
+
+module_fan_write_text() {
+    local root=$1 path=$2 mode=$3 text=$4 parent fd name tmp rc
+    module_fan_validate_write_path "$root" "$path" || return 1
+    parent=$(dirname "$path"); exec {fd}<"$root$parent" || return 1
+    expected=$(realpath -e -- "$root$parent") || { exec {fd}<&-; return 1; }
+    actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }
+    [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
+    name=$(basename "$path"); tmp=$(mktemp "/proc/self/fd/$fd/.$name.XXXXXX") || { exec {fd}<&-; return 1; }
+    printf '%s\n' "$text" > "$tmp" && chmod "$mode" -- "$tmp" && mv -f -- "$tmp" "/proc/self/fd/$fd/$name"; rc=$?; [ "$rc" -eq 0 ] || rm -f -- "$tmp"; exec {fd}<&-; return "$rc"
+}
+
+module_fan_link() {
+    local root=$1 path=$2 target=$3 parent fd name expected actual rc
+    module_fan_validate_write_path "$root" "$path" || return 1
+    parent=$(dirname "$path"); exec {fd}<"$root$parent" || return 1
+    expected=$(realpath -e -- "$root$parent") || { exec {fd}<&-; return 1; }
+    actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }
+    [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
+    name=$(basename "$path"); ln -s -- "$target" "/proc/self/fd/$fd/$name"; rc=$?; exec {fd}<&-; return "$rc"
+}
+
 module_fan_rmdir_path() {
     local root=$1 path=$2 parent fd name expected actual rc
     module_fan_validate_write_path "$root" "$path" || return 1
@@ -153,13 +185,13 @@ module_fan_snapshot() {
         source=$root$path
         if [ -e "$source" ] || [ -L "$source" ]; then
             mkdir -p "$backup$(dirname "$path")" || return 1
-            cp -a -- "$source" "$backup$path" || { echo "fan: backup fallito: $path" >&2; return 1; }
+            module_fan_snapshot_copy "$root" "$path" "$backup$path" || { echo "fan: backup fallito: $path" >&2; return 1; }
             printf '%s\n' "$path" >> "$backup/.present" || return 1
         fi
     done < <(module_fan_all_paths)
     for path in /etc/ps5-fan/fan.conf /etc/ps5-fan/state /etc/ps5-fan/profiles/low.conf /etc/ps5-fan/profiles/balanced.conf /etc/ps5-fan/profiles/high.conf; do
         source=$root$path
-        if [ -e "$source" ] || [ -L "$source" ]; then mkdir -p "$backup$(dirname "$path")" && cp -a -- "$source" "$backup$path" || return 1; fi
+        if [ -e "$source" ] || [ -L "$source" ]; then module_fan_snapshot_copy "$root" "$path" "$backup$path" || return 1; fi
     done
 }
 
@@ -325,7 +357,7 @@ module_fan_remove() {
     module_fan_snapshot "$root" "$backup" || { echo "fan: preflight rollback non disponibile" >&2; return 1; }
     if [ "$keep" != 1 ]; then
         for path in /etc/ps5-fan/fan.conf /etc/ps5-fan/state /etc/ps5-fan/profiles/low.conf /etc/ps5-fan/profiles/balanced.conf /etc/ps5-fan/profiles/high.conf; do
-            if [ -e "$root$path" ] || [ -L "$root$path" ]; then mkdir -p "$backup$(dirname "$path")" && cp -a "$root$path" "$backup$path" || return 1; fi
+            if [ -e "$root$path" ] || [ -L "$root$path" ]; then module_fan_snapshot_copy "$root" "$path" "$backup$path" || return 1; fi
         done
     fi
     if [ "$framework_managed" != 1 ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then systemctl disable --now ps5-fan-daemon.service || { echo "fan: arresto/disabilitazione fallita; nessuna rimozione eseguita" >&2; module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; return 1; }; fi
@@ -384,8 +416,8 @@ module_fan_run() {
     [ -e "$root/etc/ps5-fan/fan.conf" ] || module_fan_install_copy "$repo_dir/config/fan.conf" "$root/etc/ps5-fan/fan.conf" 644 || { module_fan_fail; return 1; }
     for profile in "$repo_dir"/config/profiles/*.conf; do [ -e "$root/etc/ps5-fan/profiles/$(basename "$profile")" ] || module_fan_install_copy "$profile" "$root/etc/ps5-fan/profiles/$(basename "$profile")" 644 || { module_fan_fail; return 1; }; done
     module_fan_install_copy "$repo_dir/systemd/ps5-fan-daemon.service" "$root/etc/systemd/system/ps5-fan-daemon.service" 644 || { module_fan_fail; return 1; }; module_fan_install_copy "$repo_dir/systemd/99-ps5-fan.rules" "$root/etc/udev/rules.d/99-ps5-fan.rules" 644 || { module_fan_fail; return 1; }
-    mkdir -p "$root/etc/systemd/system/multi-user.target.wants" || { module_fan_fail; return 1; }; if [ -L "$root/etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service" ]; then [ "$(readlink "$root/etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service")" = /etc/systemd/system/ps5-fan-daemon.service ] || { module_fan_fail; return 1; }; else [ ! -e "$root/etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service" ] && ln -s -- /etc/systemd/system/ps5-fan-daemon.service "$root/etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service" || { module_fan_fail; return 1; }; fi
-    [ -f "$root/etc/ps5-fan/state" ] || printf '%s\n' balanced > "$root/etc/ps5-fan/state" || { module_fan_fail; return 1; }; module_fan_manifest_text > "$root/etc/ps5-fan/.ps5-cachyos-tools.manifest" && chmod 0644 "$root/etc/ps5-fan/.ps5-cachyos-tools.manifest" || { module_fan_fail; return 1; }
+    mkdir -p "$root/etc/systemd/system/multi-user.target.wants" || { module_fan_fail; return 1; }; if [ -L "$root/etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service" ]; then [ "$(readlink "$root/etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service")" = /etc/systemd/system/ps5-fan-daemon.service ] || { module_fan_fail; return 1; }; else [ ! -e "$root/etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service" ] && module_fan_link "$root" /etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service /etc/systemd/system/ps5-fan-daemon.service || { module_fan_fail; return 1; }; fi
+    [ -f "$root/etc/ps5-fan/state" ] || module_fan_write_text "$root" /etc/ps5-fan/state 644 balanced || { module_fan_fail; return 1; }; module_fan_write_text "$root" /etc/ps5-fan/.ps5-cachyos-tools.manifest 644 "$(module_fan_manifest_text)" || { module_fan_fail; return 1; }
     if [ "$root" = / ] && [ "${CORE_FRAMEWORK_MANAGED:-0}" != 1 ] && [ "${PS5_TOOLS_NO_START:-0}" -eq 0 ] && command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload || { module_fan_fail; return 1; }; if [ "$active_before" -eq 1 ]; then [ "$runtime_changed" -eq 0 ] || systemctl restart ps5-fan-daemon.service || { module_fan_fail; return 1; }; systemctl is-active --quiet ps5-fan-daemon.service || { module_fan_fail; return 1; }; elif [ "$enabled_before" -eq 1 ]; then systemctl enable ps5-fan-daemon.service || { module_fan_fail; return 1; }; else systemctl enable --now ps5-fan-daemon.service || { module_fan_fail; return 1; }; fi; if [ "$active_before" -eq 0 ] && [ "$enabled_before" -eq 1 ]; then echo "fan: servizio lasciato inactive/enabled come nello stato iniziale" >&2; else health_pid=$active_pid; [ "$active_before" -eq 1 ] && [ "$runtime_changed" -eq 0 ] && health_pid=0; [ "$active_before" -eq 1 ] && [ "$runtime_changed" -ne 0 ] && restart_required=1; [ "$active_before" -eq 0 ] && [ "$enabled_before" -eq 0 ] && restart_required=1; health_timeout=$(module_fan_health_timeout /) || { module_fan_fail; return 1; }; module_fan_wait_ready / "$health_timeout" "$health_pid" "$health_cycles" "$health_instance" "$restart_required"; health_result=$?; case "$health_result" in 0) echo "fan: servizio aggiornato e health check applicativo verificato" >&2;; 2) echo "fan: servizio attivo ma hardware/stato DEGRADED: regolazione non confermata" >&2;; *) module_fan_fail; return 1;; esac; fi; fi
     [ "$root" != / ] && echo "fan: installazione autonoma completata (health check live da eseguire sul target)" >&2 || true
     module_fan_validate_manifest "$root" || { module_fan_fail; return 1; }; echo "fan: installazione autonoma completata"

@@ -386,7 +386,7 @@ core_remove_restore() {
         if grep -Fxq "$path" "$backup/.present" 2>/dev/null; then
             core_target_assert_parents "$root" "$path" || { result=1; continue; }
             core_target_prepare_dir "$root" "$(dirname "$path")" >/dev/null || result=1
-            cp -a -- "$backup$path" "$root$path" || result=1
+            core_target_copy_file "$root" "$path" "$backup$path" || result=1
         fi
     done < "$backup/.paths"
     return "$result"

@@ -177,7 +177,7 @@ core_target_write_file() {
 
 core_target_copy_file() {
     local root=$1 path=$2 source=$3 fd name tmp rc
-    [ -f "$source" ] && [ ! -L "$source" ] || return 1
+    [ -e "$source" ] || [ -L "$source" ] || return 1
     core_target_parent_fd "$root" "$path" || return 1
     fd=$CORE_TARGET_PARENT_FD; name=$(basename "$path")
     tmp=$(mktemp "/proc/self/fd/$fd/.$name.XXXXXX") || { exec {fd}<&-; return 1; }
