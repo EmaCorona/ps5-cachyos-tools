@@ -29,7 +29,7 @@ core_target_validate_offline() {
     for part in etc usr var run; do
         [ ! -L "$root/$part" ] || { core_die "directory target non può essere un symlink: $part"; return 1; }
     done
-    for part in /usr/lib /usr/local /usr/local/bin /etc/systemd /etc/systemd/system /etc/udev /etc/udev/rules.d /var/lib/ps5-cachyos-tools /run/ps5-cachyos-tools; do
+    for part in /usr/lib /usr/local /usr/local/bin /etc/systemd /etc/systemd/system /etc/udev /etc/udev/rules.d /var/lib/ps5-cachyos-tools /var/lib/ps5-cachyos-tools/state/reapply /usr/lib/ps5-cachyos-tools/modules /run/ps5-cachyos-tools; do
         core_target_assert_parents "$root" "$part" || return 1
         [ ! -L "$root$part" ] || { core_die "directory target non può essere un symlink: $part"; return 1; }
     done
