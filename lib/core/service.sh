@@ -87,8 +87,10 @@ core_service_reapply() {
     unit=$(core_registry_field "$id" 7); [ -n "$unit" ] || return 1
     policy=$(core_registry_field "$id" 3); revision=$(core_registry_field "$id" 5); boot=$(core_state_boot_id)
     if declare -F core_txn_lock >/dev/null 2>&1; then core_txn_lock "$run_root" || return 1; fi
-    mkdir -p "$run_root/run/ps5-cachyos-tools" || return 1
-    exec 9>"$run_root/run/ps5-cachyos-tools/reapply.lock"
+    local run_dir="$run_root/run/ps5-cachyos-tools" run_fd expected_run actual_run
+    [ -d "$run_dir" ] && [ ! -L "$run_dir" ] || return 1
+    exec {run_fd}<"$run_dir" || return 1; expected_run=$(realpath -e -- "$run_dir") || { exec {run_fd}<&-; return 1; }; actual_run=$(readlink -e -- "/proc/self/fd/$run_fd") || { exec {run_fd}<&-; return 1; }; [ "$actual_run" = "$expected_run" ] || { exec {run_fd}<&-; return 1; }
+    exec 9>"/proc/self/fd/$run_fd/reapply.lock" || { exec {run_fd}<&-; return 1; }; exec {run_fd}<&-
     flock -n 9 || { core_log "reapply già attivo: $id"; return 1; }
     for dep in $(core_registry_field "$id" 6); do
         [ "$(core_registry_field "$dep" 1)" = true ] || { core_state_write "$state_root" "$id" BLOCKED_DEPENDENCY "$policy" "$revision" 66 "$boot"; return 1; }

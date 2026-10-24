@@ -146,7 +146,7 @@ module_fan_restore_extra() {
 module_fan_remove_user_files() {
     local root=$1 keep=$2 path
     [ "$keep" = 1 ] && return 0
-    for path in fan.conf state profiles/low.conf profiles/balanced.conf profiles/high.conf; do rm -f -- "$root/etc/ps5-fan/$path" || return 1; done
+    for path in fan.conf state profiles/low.conf profiles/balanced.conf profiles/high.conf; do module_fan_validate_write_path "$root" "/etc/ps5-fan/$path" || return 1; rm -f -- "$root/etc/ps5-fan/$path" || return 1; done
 }
 
 module_fan_restore_service() {
@@ -201,7 +201,7 @@ module_fan_runtime_changed() {
         module_fan_mark_runtime_changed || return 1
         return 0
     fi
-    return 1
+    return 2
 }
 
 module_fan_normalize_uint() {
@@ -281,9 +281,9 @@ module_fan_remove() {
         done
     fi
     if [ "$framework_managed" != 1 ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then systemctl disable --now ps5-fan-daemon.service || { echo "fan: arresto/disabilitazione fallita; nessuna rimozione eseguita" >&2; module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; return 1; }; fi
-    while IFS= read -r path; do rm -f -- "$root$path" || { echo "fan: rimozione fallita: $path" >&2; module_fan_restore "$root" "$backup"; [ "$keep" = 1 ] || module_fan_restore_extra "$root" "$backup" || true; [ "$framework_managed" = 1 ] || module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; echo "fan: rollback incompleto" >&2; return 1; }; done < <(module_fan_all_paths)
+    while IFS= read -r path; do module_fan_validate_write_path "$root" "$path" || { echo "fan: rimozione topologia non sicura: $path" >&2; return 1; }; rm -f -- "$root$path" || { echo "fan: rimozione fallita: $path" >&2; module_fan_restore "$root" "$backup"; [ "$keep" = 1 ] || module_fan_restore_extra "$root" "$backup" || true; [ "$framework_managed" = 1 ] || module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; echo "fan: rollback incompleto" >&2; return 1; }; done < <(module_fan_all_paths)
     module_fan_remove_user_files "$root" "$keep" || { echo "fan: rimozione configurazione fallita" >&2; module_fan_restore "$root" "$backup"; [ "$keep" = 1 ] || module_fan_restore_extra "$root" "$backup" || true; [ "$framework_managed" = 1 ] || module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; echo "fan: rollback incompleto" >&2; return 1; }
-    rmdir "$root/etc/ps5-fan/profiles" 2>/dev/null || true; rmdir "$root/etc/ps5-fan" 2>/dev/null || true
+    module_fan_validate_write_path "$root" /etc/ps5-fan/profiles || return 1; module_fan_validate_write_path "$root" /etc/ps5-fan || return 1; rmdir "$root/etc/ps5-fan/profiles" 2>/dev/null || true; rmdir "$root/etc/ps5-fan" 2>/dev/null || true
     if [ "$framework_managed" != 1 ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload || { echo "fan: daemon-reload fallito dopo rimozione" >&2; module_fan_restore "$root" "$backup" || true; [ "$keep" = 1 ] || module_fan_restore_extra "$root" "$backup" || true; systemctl daemon-reload 2>/dev/null || true; module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; return 1; }; if systemctl is-active --quiet ps5-fan-daemon.service || systemctl is-enabled --quiet ps5-fan-daemon.service; then echo "fan: servizio ancora active/enabled dopo rimozione" >&2; module_fan_restore "$root" "$backup" || true; [ "$keep" = 1 ] || module_fan_restore_extra "$root" "$backup" || true; systemctl daemon-reload 2>/dev/null || true; module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; return 1; fi; fi
     echo "fan: disinstallazione completata; file utente non rimossi"
 }
@@ -307,11 +307,17 @@ module_fan_run() {
         repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
     fi
     local -a managed=(/etc/ps5-fan/.ps5-cachyos-tools.manifest /etc/ps5-fan/fan.conf /etc/ps5-fan/state /etc/ps5-fan/profiles/low.conf /etc/ps5-fan/profiles/balanced.conf /etc/ps5-fan/profiles/high.conf /usr/lib/ps5-cachyos-tools/fan.sh /usr/local/bin/ps5-fan /usr/local/bin/ps5-fan-daemon /usr/local/bin/ps5-temp /etc/systemd/system/ps5-fan-daemon.service /etc/udev/rules.d/99-ps5-fan.rules /etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service)
-    local backup_state=BACKUP_NOT_REQUIRED backup_dir='' path profile active_before=0 enabled_before=0 runtime_changed=0 health_result=0 active_pid=0 health_pid=0 health_cycles=0 health_instance='' health_timeout=0 restart_required=0
+    local backup_state=BACKUP_NOT_REQUIRED backup_dir='' path profile active_before=0 enabled_before=0 runtime_changed=0 runtime_rc=0 health_result=0 active_pid=0 health_pid=0 health_cycles=0 health_instance='' health_timeout=0 restart_required=0
     if [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then systemctl is-active --quiet ps5-fan-daemon.service && active_before=1 || active_before=0; systemctl is-enabled --quiet ps5-fan-daemon.service && enabled_before=1 || enabled_before=0; [ "$active_before" -eq 1 ] && active_pid=$(systemctl show -p MainPID --value ps5-fan-daemon.service 2>/dev/null || echo 0); [ -r /run/ps5-fan/runtime.state ] && health_cycles=$(awk -F= '$1=="cycles"{print $2}' /run/ps5-fan/runtime.state 2>/dev/null || echo 0); [ -r /run/ps5-fan/runtime.state ] && health_instance=$(awk -F= '$1=="instance_id"{print $2}' /run/ps5-fan/runtime.state 2>/dev/null || true); fi
     for path in "${managed[@]}"; do if [ -e "$root$path" ] || [ -L "$root$path" ]; then backup_state=BACKUP_CREATED; break; fi; done
     if [ "$backup_state" = BACKUP_CREATED ]; then backup_dir="$root/var/lib/ps5-cachyos-tools/backups/install-$(date +%s%N)"; module_fan_snapshot "$root" "$backup_dir" || { backup_state=BACKUP_FAILED; echo "fan: backup non disponibile, installazione annullata" >&2; return 1; }; fi
-    module_fan_runtime_changed "$root" "$repo_dir" && runtime_changed=1 || true
+    module_fan_runtime_changed "$root" "$repo_dir"; runtime_rc=$?
+    if [ "$runtime_rc" -eq 0 ]; then
+        runtime_changed=1
+    elif [ "$runtime_rc" -ne 2 ]; then
+        echo "fan: impossibile determinare la variazione runtime" >&2
+        return 1
+    fi
     module_fan_fail() {
         echo "fan: installazione fallita; rollback in corso (backup=$backup_state)" >&2
         module_fan_rollback_result=ROLLBACK_FAILED

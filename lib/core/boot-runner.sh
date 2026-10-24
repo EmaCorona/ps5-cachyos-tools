@@ -120,7 +120,7 @@ runner_module() {
         core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot" || return 1
         if [ "$request" -eq 1 ]; then
             if runner_remove_request "$CORE_STATE_ROOT" "$id"; then
-                core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot" || { core_log "$id: richiesta consumata ma stato da riconciliare"; printf 'id=%s\nphase=%s\nrevision=%s\nrequested_at=%s\n' "$id" "$phase" "$rev" "$(date +%s)" > "$request_file"; return 1; }
+                core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot" || { core_log "$id: richiesta consumata ma stato da riconciliare"; core_target_write_reapply_request "$CORE_STATE_ROOT" "$id" "$phase" "$rev" || true; return 1; }
             else
                 core_log "$id: impossibile consumare la richiesta di reapply"; return 1
             fi

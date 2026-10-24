@@ -132,7 +132,8 @@ core_install_body() {
         done
     fi
     identity="$root/var/lib/ps5-cachyos-tools/install.identity"
-    if [ ! -f "$identity" ] || [ -L "$identity" ]; then
+    core_target_validate_final "$root" /var/lib/ps5-cachyos-tools/install.identity "$identity" || return 1
+    if [ ! -f "$identity" ]; then
         printf '%s\n' "$(date +%s)-$(id -u)-$root" > "$identity" || return 1
         chmod 600 "$identity" || return 1
     fi
