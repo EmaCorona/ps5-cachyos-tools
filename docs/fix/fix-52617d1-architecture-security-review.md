@@ -1,6 +1,6 @@
 # Hardening architetturale e isolamento dei target
 
-**Commit sorgente:** [`52617d1`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/52617d1)
+**Commit sorgente:** [`0853437`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/0853437)
 **Data:** 24 ottobre 2026
 
 ## Problema
@@ -24,7 +24,7 @@ La review finale aveva rilevato rischi P0/P1 nel confine della rootfs, nella val
 - I manifest rifiutano combinazioni di fase non eseguibili, unità duplicate/riservate e ownership incoerente.
 - Snapshot, rollback e rimozione verificano gli artefatti effettivamente coinvolti; le directory framework create dalla transazione vengono ripulite senza includere moduli indipendenti.
 - Il lifecycle service riconcilia disabilitazione, unità e stato; il restore systemd usa una sola fonte per unità.
-- Le request `reapply` registrano l'identificatore applicato e, dopo un crash post-successo, vengono consumate senza rieseguire l'hook; una nuova request resta rieseguibile.
+- Le request `reapply` persistono le fasi `REQUESTED`, `RUNNING`, `APPLIED` e `COMPLETED`, registrano l'identificatore applicato e, dopo un crash post-successo, vengono consumate senza rieseguire l'hook; una nuova request resta rieseguibile.
 
 ## File coinvolti
 
@@ -42,8 +42,8 @@ La review finale aveva rilevato rischi P0/P1 nel confine della rootfs, nella val
 Eseguiti direttamente:
 
 - `bash -n` su sorgenti e test: PASS.
-- Suite core: **45 test superati, 0 falliti**.
-- Suite fan: **76 test superati, 0 falliti**.
+- Suite core: **47 test superati, 0 falliti**.
+- Suite fan: **77 test superati, 0 falliti**.
 - `git diff --check`: PASS.
 - `systemd-analyze verify` su root staging con unit e runner: PASS.
 
@@ -51,4 +51,4 @@ ShellCheck locale non disponibile; la pipeline CI deve eseguire il controllo rem
 
 ## Fonte primaria
 
-[Diff del commit `52617d1`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/52617d1)
+[Diff del commit `0853437`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/0853437)

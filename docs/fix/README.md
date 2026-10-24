@@ -1,6 +1,6 @@
 # Registro fix
 
-- 2026-10-24 — [`52617d1`](fix-52617d1-architecture-security-review.md): hardening architetturale, isolamento rootfs/live, manifest, rollback selettivo e recovery reapply.
+- 2026-10-24 — [`0853437`](fix-52617d1-architecture-security-review.md): hardening architetturale, isolamento rootfs/live, manifest, rollback selettivo e recovery reapply.
 
 - 2026-10-24 — [`ed240b2`](fix-modular-final-hardening-v2.md): root live, dipendenze selettive, stato once/always, service, rollback, lock condiviso, CLI e regressioni concorrenti.
 
