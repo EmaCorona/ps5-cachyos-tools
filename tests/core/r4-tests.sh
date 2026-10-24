@@ -167,5 +167,18 @@ else
     no 'cleanup request ha cancellato la request esterna'
 fi
 
+dir_escape_root="$tmp/dir-escape-root"; dir_outside="$tmp/dir-outside"; dir_backup="$tmp/dir-escape-backup"
+mkdir -p "$dir_escape_root/var" "$dir_outside/lib/ps5-cachyos-tools" "$dir_backup"
+ln -s "$dir_outside/lib" "$dir_escape_root/var/lib"
+: > "$dir_backup/.paths"; : > "$dir_backup/.present"
+printf '/var/lib/ps5-cachyos-tools\n' > "$dir_backup/.created-dirs"
+if core_txn_restore "$dir_escape_root" "$dir_backup" >/dev/null 2>&1; then
+    no 'rollback ha seguito var/lib symlinkato durante cleanup directory'
+elif [ -d "$dir_outside/lib/ps5-cachyos-tools" ]; then
+    ok 'rollback rifiuta var/lib symlinkato senza rimuovere fuori root'
+else
+    no 'rollback ha rimosso directory esterna tramite var/lib symlinkato'
+fi
+
 printf '%s\n' "$pass test R4 superati, $fail falliti"
 [ "$fail" -eq 0 ]

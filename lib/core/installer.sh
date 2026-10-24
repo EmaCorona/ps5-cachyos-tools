@@ -254,7 +254,12 @@ core_txn_restore() {
     if [ -f "$backup/.created-dirs" ]; then
         while IFS= read -r dir; do
             [ -n "$dir" ] || continue
-            rmdir -- "$root$dir" 2>/dev/null || { [ ! -e "$root$dir" ] || result=1; }
+            if core_target_validate_final "$root" "$dir" "$root$dir"; then
+                rmdir -- "$root$dir" 2>/dev/null || { [ ! -e "$root$dir" ] || result=1; }
+            else
+                result=1
+                printf '%s\n' "$dir" >> "$backup/.rollback-failed-paths"
+            fi
         done < <(sort -r "$backup/.created-dirs")
     fi
     return "$result"
