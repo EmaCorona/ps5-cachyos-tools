@@ -58,7 +58,11 @@ core_service_reapply() {
     [ "$rc" -ne 0 ] || systemctl restart "$unit" || rc=$?
     [ "$rc" -ne 0 ] || systemctl is-active --quiet "$unit" || rc=1
     if [ "$rc" -eq 0 ]; then
-        core_state_write / "$id" SUCCESS "$policy" "$revision" 0 "$boot"
+        if ! core_state_write / "$id" SUCCESS "$policy" "$revision" 0 "$boot"; then
+            core_service_restore_state / "$id" || core_log "ROLLBACK_FILES_RESTORED_SERVICE_FAILED: service=$id"
+            core_log "commit stato service fallito: rollback applicato per $id"
+            return 1
+        fi
     else
         core_state_write / "$id" FAILED "$policy" "$revision" "$rc" "$boot" || true
         core_service_restore_state / "$id" || core_log "ROLLBACK_FILES_RESTORED_SERVICE_FAILED: service=$id"
