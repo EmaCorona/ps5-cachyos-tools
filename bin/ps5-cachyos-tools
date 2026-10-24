@@ -62,7 +62,7 @@ core_cli_reset_safe() {
     core_txn_lock "$root" || return 1
     state="$root/var/lib/ps5-cachyos-tools/state/modules/$module.state"
     core_target_validate_final "$root" "/var/lib/ps5-cachyos-tools/state/modules/$module.state" "$state" || return 1
-    content=''; [ -f "$state" ] && content=$(cat -- "$state") || true
+    content=''; [ -f "$state" ] && content=$(core_target_read_file "$root" "/var/lib/ps5-cachyos-tools/state/modules/$module.state") || true
     core_target_remove_path "$root" "/var/lib/ps5-cachyos-tools/state/modules/$module.state" || { [ -z "$content" ] || core_target_write_file "$root" "/var/lib/ps5-cachyos-tools/state/modules/$module.state" 600 "$content"; return 1; }
 }
 core_cli_reapply_legacy() {

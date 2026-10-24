@@ -232,7 +232,7 @@ core_txn_snapshot() {
         [ -n "$path" ] || continue
         core_target_validate_final "$root" "$path" "$root$path" || return 1
         if [ -e "$root$path" ] || [ -L "$root$path" ]; then
-            mkdir -p "$backup$(dirname "$path")" || return 1
+            core_target_mkdir_path "$root" "${backup#"$root"}$(dirname "$path")" || return 1
             core_target_snapshot_file "$root" "$path" "$backup$path" || return 1
             printf '%s\n' "$path" >> "$backup/.present" || return 1
         fi
@@ -359,7 +359,7 @@ core_remove_snapshot() {
         full="$root$path"
         core_target_validate_final "$root" "$path" "$full" || return 1
         if [ -e "$full" ] || [ -L "$full" ]; then
-            mkdir -p "$backup$(dirname "$path")" || return 1
+            core_target_mkdir_path "$root" "${backup#"$root"}$(dirname "$path")" || return 1
             core_target_snapshot_file "$root" "$path" "$backup$path" || return 1
             printf '%s\n' "$path" >> "$backup/.present" || return 1
         fi
@@ -370,7 +370,7 @@ core_remove_snapshot() {
         full="$root$path"
         core_target_validate_final "$root" "$path" "$full" || return 1
         if [ -e "$full" ] || [ -L "$full" ]; then
-            mkdir -p "$backup$(dirname "$path")" || return 1
+            core_target_mkdir_path "$root" "${backup#"$root"}$(dirname "$path")" || return 1
             core_target_snapshot_file "$root" "$path" "$backup$path" || return 1
             printf '%s\n' "$path" >> "$backup/.present" || return 1
         fi

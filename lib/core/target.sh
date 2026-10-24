@@ -155,6 +155,26 @@ core_target_parent_fd() {
     CORE_TARGET_PARENT_FD=$fd
 }
 
+core_target_mkdir_path() {
+    local root=$1 path=$2 fd expected actual rc
+    core_target_assert_parents "$root" "$path" || return 1
+    exec {fd}<"$root" || return 1
+    expected=$(realpath -e -- "$root") || { exec {fd}<&-; return 1; }
+    actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }
+    [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
+    mkdir -p -- "/proc/self/fd/$fd/${path#/}"; rc=$?; exec {fd}<&-; return "$rc"
+}
+
+core_target_read_file() {
+    local root=$1 path=$2 fd name expected actual
+    core_target_parent_fd "$root" "$path" || return 1
+    fd=$CORE_TARGET_PARENT_FD; name=$(basename "$path")
+    expected=$(realpath -e -- "$root$(dirname "$path")") || { exec {fd}<&-; return 1; }
+    actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }
+    [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
+    cat -- "/proc/self/fd/$fd/$name"; local rc=$?; exec {fd}<&-; return "$rc"
+}
+
 core_target_remove_path() {
     local root=$1 path=$2 recursive=${3:-0} fd name
     core_target_validate_final "$root" "$path" "$root$path" || return 1
@@ -187,14 +207,14 @@ core_target_copy_file() {
 }
 
 core_target_snapshot_file() {
-    local root=$1 path=$2 destination=$3 parent fd name expected actual
+    local root=$1 path=$2 destination=$3 parent fd name expected actual dest_rel
     core_target_validate_final "$root" "$path" "$root$path" || return 1
     [ -e "$root$path" ] || [ -L "$root$path" ] || return 0
     parent=$(dirname "$path"); exec {fd}<"$root$parent" || return 1
     expected=$(realpath -e -- "$root$parent") || { exec {fd}<&-; return 1; }
     actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }
     [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
-    name=$(basename "$path"); mkdir -p "$(dirname "$destination")" || { exec {fd}<&-; return 1; }
+    name=$(basename "$path"); dest_rel=${destination#"$root"}; core_target_mkdir_path "$root" "$(dirname "$dest_rel")" >/dev/null 2>&1 || { exec {fd}<&-; return 1; }
     cp -a -- "/proc/self/fd/$fd/$name" "$destination"; local rc=$?; exec {fd}<&-; return "$rc"
 }
 
