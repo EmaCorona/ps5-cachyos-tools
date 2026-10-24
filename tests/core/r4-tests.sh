@@ -78,6 +78,23 @@ else
     no 'fixture remove standalone non installabile'
 fi
 
+backup_root="$tmp/backup-root"; backup_outside="$tmp/backup-outside"
+mkdir -p "$backup_root/etc" "$backup_outside"; printf 'ID=linux\nNAME=r4\n' > "$backup_root/etc/os-release"
+if "$repo/bin/ps5-cachyos-tools" install --root "$backup_root" --module fan >/dev/null 2>&1; then
+    mkdir -p "$backup_root/var/lib/ps5-cachyos-tools"
+    ln -s "$backup_outside" "$backup_root/var/lib/ps5-cachyos-tools/backups"
+    source "$backup_root/usr/lib/ps5-cachyos-tools/fan.sh"
+    if module_fan_run "$backup_root" >/dev/null 2>&1; then
+        no 'backup fan accetta var symlinkata'
+    elif [ -z "$(find "$backup_outside" -mindepth 1 -print -quit)" ]; then
+        ok 'backup fan rifiuta var symlinkata senza scrivere fuori root'
+    else
+        no 'backup fan ha scritto fuori root tramite var symlinkata'
+    fi
+else
+    no 'fixture backup fan non installabile'
+fi
+
 rollback_root="$tmp/rollback-root"; mkdir -p "$rollback_root/etc"; printf 'ID=linux\nNAME=r4\n' > "$rollback_root/etc/os-release"
 rollback_repo="$tmp/rollback-repo"; cp -a "$ROOT/." "$rollback_repo"
 cat > "$rollback_repo/modules/fan/install.sh" <<'EOF'

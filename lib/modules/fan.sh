@@ -87,7 +87,10 @@ module_fan_check_removal_permissions() {
 }
 
 module_fan_snapshot() {
-    local root=$1 backup=$2 path source
+    local root=$1 backup=$2 path source backup_path
+    backup_path=${backup#"$root"}
+    [[ "$backup" != "$backup_path" && "$backup_path" = /var/lib/ps5-cachyos-tools/backups/* ]] || { echo 'fan: percorso backup non autorizzato' >&2; return 1; }
+    module_fan_validate_write_path "$root" "$backup_path" || return 1
     mkdir -p "$backup" || return 1
     while IFS= read -r path; do
         source=$root$path

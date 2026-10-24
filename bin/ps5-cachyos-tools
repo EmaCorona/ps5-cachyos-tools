@@ -30,9 +30,13 @@ core_cli_status() {
             if [ "$active" = yes ] && [ "$id" = fan ] && [ -r /run/ps5-fan/runtime.state ]; then
                 runtime_state=$(awk -F= '$1=="state"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || true)
                 profile=$(awk -F= '$1=="profile_applied"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || true)
-                case "$runtime_state:$profile" in
-                    NORMAL:*|HEATING:*|EMERGENCY:*) readiness=ready ;;
-                    DEGRADED:*) readiness=degraded ;;
+                case "$profile" in
+                    low|balanced|high)
+                        case "$runtime_state" in
+                            NORMAL|HEATING|EMERGENCY) readiness=ready ;;
+                            DEGRADED) readiness=degraded ;;
+                            *) readiness=not-ready ;;
+                        esac ;;
                     *) readiness=not-ready ;;
                 esac
             elif [ "$active" = no ]; then readiness=not-running; fi
