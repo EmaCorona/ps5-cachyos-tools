@@ -106,13 +106,15 @@ core_target_assert_parents() {
 }
 
 core_target_validate_final() {
-    local root=$1 path=$2 full=$3 link target resolved
+    local root=$1 path=$2 full=$3 link target resolved expected_unit
     [ "$root" = / ] && full="$path"
     core_target_assert_parents "$root" "$path" || return 1
     if [ -L "$full" ]; then
         link=$(readlink -- "$full") || return 1
-        case "$path:$link" in
-            /etc/systemd/system/multi-user.target.wants/*.service:/etc/systemd/system/*.service) : ;;
+        case "$path" in
+            /etc/systemd/system/multi-user.target.wants/*.service)
+                expected_unit=${path##*/}
+                [ "$link" = "/etc/systemd/system/$expected_unit" ] || { core_die "symlink finale non autorizzato: $path -> $link"; return 1; } ;;
             *) core_die "symlink finale non autorizzato: $path -> $link"; return 1;;
         esac
         case "$link" in

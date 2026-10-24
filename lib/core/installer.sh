@@ -9,8 +9,17 @@ core_txn_lock() {
 }
 
 core_install_copy() {
-    local source=$1 target=$2 mode=$3
+    local source=$1 target=$2 mode=$3 source_id target_id
     [ -f "$source" ] || return 1
+    [ ! -L "$source" ] || return 1
+    if [ -f "$target" ] && [ ! -L "$target" ]; then
+        source_id=$(stat -c '%d:%i' -- "$source" 2>/dev/null) || return 1
+        target_id=$(stat -c '%d:%i' -- "$target" 2>/dev/null) || return 1
+        if [ "$source_id" = "$target_id" ]; then
+            chmod "$mode" -- "$target" || return 1
+            return 0
+        fi
+    fi
     if [ -f "$target" ] && cmp -s -- "$source" "$target"; then
         chmod "$mode" -- "$target" || return 1
         return 0
@@ -20,15 +29,46 @@ core_install_copy() {
 }
 
 core_install_module_valid() {
-    local root=$1 repo=$2 id=$3 path target_conf="$root/usr/lib/ps5-cachyos-tools/modules/$id/module.conf"
-    [ -f "$target_conf" ] && cmp -s -- "$repo/modules/$id/module.conf" "$target_conf" || return 1
+    local root=$1 repo=$2 id=$3 path source target unit
+    local target_conf="$root/usr/lib/ps5-cachyos-tools/modules/$id/module.conf"
+    [ -f "$target_conf" ] && [ ! -L "$target_conf" ] && cmp -s -- "$repo/modules/$id/module.conf" "$target_conf" || return 1
+    [ "$(stat -c '%a' "$target_conf" 2>/dev/null)" = 644 ] || return 1
+    for path in install.sh boot.sh check.sh remove.sh readiness.sh; do
+        source="$repo/modules/$id/$path"; target="$root/usr/lib/ps5-cachyos-tools/modules/$id/$path"
+        if [ -e "$source" ]; then
+            [ -f "$target" ] && [ ! -L "$target" ] && cmp -s -- "$source" "$target" || return 1
+            [ "$(stat -c '%a' "$target" 2>/dev/null)" = 755 ] || return 1
+        else
+            [ ! -e "$target" ] && [ ! -L "$target" ] || return 1
+        fi
+    done
     for path in $(core_registry_field "$id" 10); do
         [ -e "$root$path" ] || [ -L "$root$path" ] || return 1
+        case "$path" in
+            /etc/systemd/system/multi-user.target.wants/*.service)
+                unit=${path##*/}; [ -L "$root$path" ] && [ "$(readlink -- "$root$path")" = "/etc/systemd/system/$unit" ] || return 1 ;;
+            /etc/systemd/system/*.service)
+                unit=${path##*/}; source=$(core_service_source "$repo" "$unit") || return 1
+                [ -f "$root$path" ] && [ ! -L "$root$path" ] && cmp -s -- "$source" "$root$path" || return 1
+                [ "$(stat -c '%a' "$root$path" 2>/dev/null)" = 644 ] || return 1 ;;
+            /usr/lib/ps5-cachyos-tools/fan.sh)
+                source="$repo/lib/modules/fan.sh"; [ -f "$root$path" ] && cmp -s -- "$source" "$root$path" || return 1
+                [ "$(stat -c '%a' "$root$path" 2>/dev/null)" = 755 ] || return 1 ;;
+            /usr/lib/ps5-cachyos-tools/lib/modules/fan.sh)
+                source="$repo/lib/modules/fan.sh"; [ -f "$root$path" ] && cmp -s -- "$source" "$root$path" || return 1
+                [ "$(stat -c '%a' "$root$path" 2>/dev/null)" = 755 ] || return 1 ;;
+            /usr/local/bin/ps5-fan|/usr/local/bin/ps5-fan-daemon|/usr/local/bin/ps5-temp)
+                source="$repo/bin/${path##*/}"; [ -f "$root$path" ] && cmp -s -- "$source" "$root$path" || return 1
+                [ "$(stat -c '%a' "$root$path" 2>/dev/null)" = 755 ] || return 1 ;;
+            /etc/udev/rules.d/99-ps5-fan.rules)
+                source="$repo/systemd/99-ps5-fan.rules"; [ -f "$root$path" ] && cmp -s -- "$source" "$root$path" || return 1
+                [ "$(stat -c '%a' "$root$path" 2>/dev/null)" = 644 ] || return 1 ;;
+        esac
     done
 }
 
 core_install_body() {
-    local root=$1 repo=$2 module=${3-} moddir id hook path lock_dir target rc core_src fan_src requires_boot order type
+    local root=$1 repo=$2 module=${3-} moddir id hook path lock_dir target rc core_src fan_src requires_boot order type identity
     [ -d "$repo/lib/core" ] && core_src="$repo/lib/core" || core_src="$repo/core"
     [ -f "$repo/lib/modules/fan.sh" ] && fan_src="$repo/lib/modules/fan.sh" || fan_src="$repo/modules/fan.sh"
     CORE_CONFIG_ROOT=${CORE_CONFIG_ROOT:-$root}
@@ -71,7 +111,11 @@ core_install_body() {
             [ -f "$repo/systemd/$path" ] && core_install_copy "$repo/systemd/$path" "$root/usr/lib/ps5-cachyos-tools/systemd/$path" 644 || return 1
         done
     fi
-    printf '%s\n' "$(date +%s)-$(id -u)-$root" > "$root/var/lib/ps5-cachyos-tools/install.identity"
+    identity="$root/var/lib/ps5-cachyos-tools/install.identity"
+    if [ ! -f "$identity" ] || [ -L "$identity" ]; then
+        printf '%s\n' "$(date +%s)-$(id -u)-$root" > "$identity" || return 1
+        chmod 600 "$identity" || return 1
+    fi
     core_registry_discover "$repo/modules" >/dev/null || return 1
     core_registry_validate_owned_paths || return 1
     core_registry_validate_dependencies || return 1
@@ -80,7 +124,7 @@ core_install_body() {
     while IFS= read -r id; do [ -n "$id" ] || continue; moddir="$repo/modules/$id"
         [ -d "$moddir" ] || return 1
         [ -f "$moddir/module.conf" ] && [ ! -L "$moddir/module.conf" ] || return 1
-        for hook in install.sh boot.sh check.sh remove.sh; do [ ! -L "$moddir/$hook" ] || { core_log "hook symlink non trusted: $id/$hook"; return 1; }; done
+        for hook in install.sh boot.sh check.sh remove.sh readiness.sh; do [ ! -L "$moddir/$hook" ] || { core_log "hook symlink non trusted: $id/$hook"; return 1; }; done
         CORE_REGISTRY_ROOT="$repo/modules" core_registry_discover "$repo/modules" >/dev/null || return 1
         [ "${CORE_MODULE[$id]+x}" = x ] || return 1
         requires_boot=$(core_registry_field "$id" 9)
@@ -96,18 +140,19 @@ core_install_body() {
             core_log "dipendenza già valida: $id"
             continue
         fi
-        mkdir -p "$root/usr/lib/ps5-cachyos-tools/modules/$id"; cp -a "$moddir/module.conf" "$root/usr/lib/ps5-cachyos-tools/modules/$id/" || return 1
-        for hook in install.sh boot.sh check.sh remove.sh; do
+        mkdir -p "$root/usr/lib/ps5-cachyos-tools/modules/$id" || return 1
+        core_install_copy "$moddir/module.conf" "$root/usr/lib/ps5-cachyos-tools/modules/$id/module.conf" 644 || return 1
+        for hook in install.sh boot.sh check.sh remove.sh readiness.sh; do
             if [ -e "$moddir/$hook" ]; then
                 [ -f "$moddir/$hook" ] && [ ! -L "$moddir/$hook" ] || { core_log "hook non regolare: $id/$hook"; return 1; }
                 target=$(core_target_path "$root" "/usr/lib/ps5-cachyos-tools/modules/$id/$hook") || return 1
-                install -m 0755 "$moddir/$hook" "$target" || { core_log "installazione hook fallita: $id/$hook"; return 1; }
+                core_install_copy "$moddir/$hook" "$target" 755 || { core_log "installazione hook fallita: $id/$hook"; return 1; }
             fi
         done
         enabled=$(core_registry_field "$id" 1)
         if [ "$enabled" = true ] || [ -n "$module" ]; then
             if [ -x "$moddir/install.sh" ]; then
-                CORE_REPO="$repo" CORE_INSTALL_MODE="${CORE_INSTALL_MODE:-offline}" CORE_TARGET_ROOT="$root" CORE_BOOT_TARGET="${CORE_BOOT_TARGET:-}" CORE_MODULE_ID="$id" CORE_DRY_RUN=0 "$moddir/install.sh" "$root"; rc=$?
+                CORE_REPO="$repo" CORE_INSTALL_MODE="${CORE_INSTALL_MODE:-offline}" CORE_TARGET_ROOT="$root" CORE_BOOT_TARGET="${CORE_BOOT_TARGET:-}" CORE_MODULE_ID="$id" CORE_FRAMEWORK_MANAGED=1 CORE_DRY_RUN=0 "$moddir/install.sh" "$root"; rc=$?
                 [ "$rc" -eq 0 ] || { core_log "install hook fallito: $id (rc=$rc)"; return "$rc"; }
             fi
         fi
@@ -257,6 +302,18 @@ core_remove_snapshot() {
             printf '%s\n' "$path" >> "$backup/.present" || return 1
         fi
     done
+    if [ "$id" = fan ]; then
+        for path in /etc/ps5-fan/fan.conf /etc/ps5-fan/state /etc/ps5-fan/profiles/low.conf /etc/ps5-fan/profiles/balanced.conf /etc/ps5-fan/profiles/high.conf; do
+            grep -Fxq "$path" "$backup/.paths" 2>/dev/null || printf '%s\n' "$path" >> "$backup/.paths" || return 1
+            full="$root$path"
+            core_target_validate_final "$root" "$path" "$full" || return 1
+            if [ -e "$full" ] || [ -L "$full" ]; then
+                mkdir -p "$backup$(dirname "$path")" || return 1
+                cp -a -- "$full" "$backup$path" || return 1
+                printf '%s\n' "$path" >> "$backup/.present" || return 1
+            fi
+        done
+    fi
 }
 
 core_remove_restore() {

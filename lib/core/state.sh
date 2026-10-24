@@ -19,7 +19,7 @@ core_state_write() {
     if [ -f "$root/var/lib/ps5-cachyos-tools/state/reapply/$id.request" ] && [ ! -L "$root/var/lib/ps5-cachyos-tools/state/reapply/$id.request" ]; then
         request_id=$(awk -F= '$1=="requested_at"{print $2; exit}' "$root/var/lib/ps5-cachyos-tools/state/reapply/$id.request" 2>/dev/null || true)
     fi
-    [ "$status" = SUCCESS ] && [ -n "$request_id" ] && applied_request_id=$request_id
+    { [ "$status" = APPLIED ] || [ "$status" = SUCCESS ]; } && [ -n "$request_id" ] && applied_request_id=$request_id
     case "$status" in RUNNING) request_phase=RUNNING;; APPLIED) request_phase=APPLIED;; SUCCESS) [ -n "$request_id" ] && request_phase=COMPLETED || request_phase=NONE;; *) [ -n "$request_id" ] && request_phase=REQUESTED || request_phase=NONE;; esac
     [ "$status" = SUCCESS ] && { completed_at=$now; completed_revision=$revision; }
     printf 'id=%s\npolicy_at_run=%s\nrevision=%s\ncompleted_at=%s\ncompleted_revision=%s\nreapply_applied_id=%s\nrequest_phase=%s\nlast_attempt_at=%s\nlast_exit_code=%s\nlast_boot_id=%s\nattempt_boot_id=%s\nautomatic_attempted_boot_id=%s\nreapply_requested=%s\nstatus=%s\ninstall_identity=%s\n' "$id" "$policy" "$revision" "$completed_at" "$completed_revision" "$applied_request_id" "$request_phase" "$now" "$code" "$boot_id" "$boot_id" "$boot_id" "$([ -f "$root/var/lib/ps5-cachyos-tools/state/reapply/$id.request" ] && echo true || echo false)" "$status" "$(cat "$root/var/lib/ps5-cachyos-tools/install.identity" 2>/dev/null || echo unknown)" > "$tmp" || { rm -f "$tmp"; return 1; }

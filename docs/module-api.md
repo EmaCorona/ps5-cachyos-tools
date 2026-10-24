@@ -1,6 +1,6 @@
 # Module API
 
-Ogni modulo installabile ha una directory `modules/<id>/` con `module.conf` e hook opzionali `install.sh`, `boot.sh`, `check.sh`, `remove.sh`. Il manifest usa chiavi allowlistate (`ID`, `NAME`, `ENABLED`, `TYPE`, `RUN_POLICY`, `BOOT_PHASE`, `REVISION`, `DEPENDENCIES`, `SERVICE_UNIT`, `FAILURE_POLICY`, `REQUIRES_BOOT`, `OWNED_PATHS`). `OWNED_PATHS` dichiara i percorsi assoluti posseduti dal modulo e consente al framework di includerli nello snapshot e nel rollback.
+Ogni modulo installabile ha una directory `modules/<id>/` con `module.conf` e hook opzionali `install.sh`, `boot.sh`, `check.sh`, `remove.sh`, `readiness.sh`. Il manifest usa chiavi allowlistate (`ID`, `NAME`, `ENABLED`, `TYPE`, `RUN_POLICY`, `BOOT_PHASE`, `REVISION`, `DEPENDENCIES`, `SERVICE_UNIT`, `FAILURE_POLICY`, `REQUIRES_BOOT`, `OWNED_PATHS`, `READINESS_HOOK`). `OWNED_PATHS` dichiara i percorsi assoluti posseduti dal modulo e consente al framework di includerli nello snapshot e nel rollback.
 
 `install.sh ROOT` prepara una rootfs idempotente. `boot.sh ROOT PHASE` è riservato ai moduli `TYPE=task`; il suo exit code determina `SUCCESS` o `FAILED`. I servizi permanenti sono dichiarati `TYPE=service`, `RUN_POLICY=always` e avviati da una unit systemd propria. Gli hook assenti sono validi quando non richiesti dal tipo.
 
@@ -17,3 +17,7 @@ In modalità offline `--root` e `--boot` possono riferirsi a mount separati. Ent
 La modalità `--live` richiede root e un segnale PS5 riconoscibile da `/sys` o dai metadati di piattaforma. Su un ambiente non riconosciuto deve essere usato `--root` oppure l'override esplicito `PS5_TOOLS_ALLOW_LIVE=1`.
 
 Per un modulo `service`, la rimozione salva prima gli artefatti e lo stato operativo, arresta e disabilita la unit in modalità live, esegue l'hook e ripristina file e stato systemd se un passaggio fallisce. Una unit può provenire da `systemd/<unit>` oppure dal runtime `usr/lib/ps5-cachyos-tools/systemd/<unit>`; preflight e installazione usano lo stesso resolver. `remove` conserva le configurazioni per default (`--keep-config`); `--purge-config` passa al modulo l'autorizzazione esplicita a rimuoverle.
+
+## Readiness dei service
+
+Un modulo `service` può dichiarare `READINESS_HOOK=readiness.sh`. Il framework esegue l'hook dopo `systemctl is-active` nelle installazioni e nei `reapply` live; l'hook deve restituire zero soltanto quando il servizio è applicativamente pronto. In offline il controllo non viene falsamente dichiarato: la verifica resta demandata al boot/live target.

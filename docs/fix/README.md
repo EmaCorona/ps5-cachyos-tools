@@ -35,3 +35,4 @@ Il commit iniziale introduce il controller autonomo; non è una correzione appli
 - 2026-10-24 — [`23652e7`](fix-23652e7-hardware-config.md): rifiuto delle configurazioni hardware invalide.
 - 2026-10-24 — [`e63668e`](fix-e63668e-config-validation.md): validazione numerica e propagazione degli errori CLI.
 - 2026-10-24 — [`c2a4145`](fix-c2a4145-runtime-hardening.md): hardening dell'installazione, del parser e del runtime.
+- 2026-10-24 — [`r3-final-architecture-review`](fix-r3-final-architecture-review.md): chiusura MOD-R3-01…11, reinstallazione idempotente, lifecycle, recovery, policy, rollback e readiness.

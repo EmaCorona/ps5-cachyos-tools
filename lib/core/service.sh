@@ -103,6 +103,7 @@ core_service_reapply() {
     systemctl daemon-reload || rc=$?
     [ "$rc" -ne 0 ] || systemctl restart "$unit" || rc=$?
     [ "$rc" -ne 0 ] || systemctl is-active --quiet "$unit" || rc=1
+    [ "$rc" -ne 0 ] || core_service_readiness "$root" "$id" || rc=1
     if [ "$rc" -eq 0 ]; then
         if ! core_state_write "$state_root" "$id" SUCCESS "$policy" "$revision" 0 "$boot"; then
             core_service_restore_state / "$id" || core_log "ROLLBACK_FILES_RESTORED_SERVICE_FAILED: service=$id"
@@ -121,6 +122,16 @@ core_service_source() {
     if [ -f "$repo/systemd/$unit" ] && [ ! -L "$repo/systemd/$unit" ]; then printf '%s\n' "$repo/systemd/$unit"; return 0; fi
     if [ -f "$repo/usr/lib/ps5-cachyos-tools/systemd/$unit" ] && [ ! -L "$repo/usr/lib/ps5-cachyos-tools/systemd/$unit" ]; then printf '%s\n' "$repo/usr/lib/ps5-cachyos-tools/systemd/$unit"; return 0; fi
     return 1
+}
+
+core_service_readiness() {
+    local root=$1 id=$2 hook
+    [ "$root" = / ] || return 0
+    hook=$(core_registry_field "$id" 11)
+    [ -n "$hook" ] || return 0
+    hook="${CORE_PREFIX:-/usr/lib/ps5-cachyos-tools}/modules/$id/$hook"
+    [ -x "$hook" ] || { core_log "readiness hook assente: $id"; return 1; }
+    CORE_INSTALL_MODE=live CORE_MODULE_ID="$id" "$hook" "$root" || { core_log "readiness check fallito: $id"; return 1; }
 }
 
 core_service_install_file() {
@@ -170,8 +181,9 @@ core_service_module_install() {
             return 1
         fi
         if [ "${CORE_INSTALL_MODE:-offline}" = live ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then
-            systemctl disable "$unit" || return 1
+            systemctl disable --now "$unit" || return 1
             systemctl is-enabled --quiet "$unit" && { core_log "service ancora enabled: $unit"; return 1; } || true
+            systemctl is-active --quiet "$unit" && { core_log "service ancora active: $unit"; return 1; } || true
         fi
         return 0
     fi
@@ -183,6 +195,7 @@ core_service_module_install() {
         systemctl enable "$unit" || return 1
         if [ "$CORE_SERVICE_FILE_CHANGED" -eq 1 ]; then systemctl restart "$unit" 2>/dev/null || systemctl start "$unit" || return 1; else systemctl is-active --quiet "$unit" || systemctl start "$unit" || return 1; fi
         systemctl is-active --quiet "$unit" || { core_log "health check service fallito: $unit"; return 1; }
+        core_service_readiness "$root" "$id" || return 1
     fi
 }
 
