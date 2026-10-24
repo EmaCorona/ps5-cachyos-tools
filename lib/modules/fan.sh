@@ -108,6 +108,7 @@ module_fan_restore() {
     [ -n "$backup" ] && [ -d "$backup" ] || { echo "fan: rollback rifiutato: backup non creato" >&2; return 1; }
     while IFS= read -r path; do
         [ -n "$path" ] || continue
+        module_fan_validate_write_path "$root" "$path" || { echo "fan: rollback rifiutato per topologia non sicura: $path" >&2; failed=1; continue; }
         if [ -e "$backup$path" ] || [ -L "$backup$path" ]; then
             rm -rf -- "$root$path" || { echo "fan: rollback: impossibile rimuovere $path" >&2; failed=1; continue; }
             mkdir -p "$root$(dirname "$path")" && cp -a -- "$backup$path" "$root$path" || { echo "fan: rollback fallito: $path" >&2; failed=1; }
@@ -121,6 +122,7 @@ module_fan_restore() {
 module_fan_restore_extra() {
     local root=$1 backup=$2 path
     for path in /etc/ps5-fan/fan.conf /etc/ps5-fan/state /etc/ps5-fan/profiles/low.conf /etc/ps5-fan/profiles/balanced.conf /etc/ps5-fan/profiles/high.conf; do
+        module_fan_validate_write_path "$root" "$path" || return 1
         if [ -e "$backup$path" ] || [ -L "$backup$path" ]; then
             rm -rf -- "$root$path" && mkdir -p "$root$(dirname "$path")" && cp -a -- "$backup$path" "$root$path" || return 1
         else
@@ -266,6 +268,7 @@ module_fan_run() {
     fi
     local -a managed=(/etc/ps5-fan/.ps5-cachyos-tools.manifest /etc/ps5-fan/fan.conf /etc/ps5-fan/state /etc/ps5-fan/profiles/low.conf /etc/ps5-fan/profiles/balanced.conf /etc/ps5-fan/profiles/high.conf /usr/lib/ps5-cachyos-tools/fan.sh /usr/local/bin/ps5-fan /usr/local/bin/ps5-fan-daemon /usr/local/bin/ps5-temp /etc/systemd/system/ps5-fan-daemon.service /etc/udev/rules.d/99-ps5-fan.rules /etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service)
     local backup_state=BACKUP_NOT_REQUIRED backup_dir='' path profile active_before=0 enabled_before=0 runtime_changed=0 health_result=0 active_pid=0 health_pid=0 health_cycles=0 health_instance='' health_timeout=0 restart_required=0
+    if [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then systemctl is-active --quiet ps5-fan-daemon.service && active_before=1 || active_before=0; systemctl is-enabled --quiet ps5-fan-daemon.service && enabled_before=1 || enabled_before=0; [ "$active_before" -eq 1 ] && active_pid=$(systemctl show -p MainPID --value ps5-fan-daemon.service 2>/dev/null || echo 0); [ -r /run/ps5-fan/runtime.state ] && health_cycles=$(awk -F= '$1=="cycles"{print $2}' /run/ps5-fan/runtime.state 2>/dev/null || echo 0); [ -r /run/ps5-fan/runtime.state ] && health_instance=$(awk -F= '$1=="instance_id"{print $2}' /run/ps5-fan/runtime.state 2>/dev/null || true); fi
     for path in "${managed[@]}"; do if [ -e "$root$path" ] || [ -L "$root$path" ]; then backup_state=BACKUP_CREATED; break; fi; done
     if [ "$backup_state" = BACKUP_CREATED ]; then backup_dir="$root/var/lib/ps5-cachyos-tools/backups/install-$(date +%s%N)"; module_fan_snapshot "$root" "$backup_dir" || { backup_state=BACKUP_FAILED; echo "fan: backup non disponibile, installazione annullata" >&2; return 1; }; fi
     module_fan_runtime_changed "$root" "$repo_dir" && runtime_changed=1 || true

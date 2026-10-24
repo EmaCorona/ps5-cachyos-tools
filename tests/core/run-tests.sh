@@ -210,7 +210,9 @@ printf a > "$1/etc/dep-a.marker"
 printf '%s\n' "$(( $(cat "$1/var/lib/ps5-cachyos-tools/dep-a.count" 2>/dev/null || echo 0) + 1 ))" > "$1/var/lib/ps5-cachyos-tools/dep-a.count"
 EOF
 printf '#!/usr/bin/env bash\nexit 0\n' > "$dep_repo/modules/dep-a/boot.sh"
+printf '#!/usr/bin/env bash\ntest "$(cat "$1/etc/dep-a.marker" 2>/dev/null)" = a\n' > "$dep_repo/modules/dep-a/check.sh"
 printf '#!/usr/bin/env bash\ntest -f "$1/etc/dep-a.marker" || exit 23\nprintf b > "$1/etc/dep-b.marker"\n' > "$dep_repo/modules/dep-b/install.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$dep_repo/modules/dep-b/boot.sh"; chmod 0755 "$dep_repo/modules/dep-"*/install.sh "$dep_repo/modules/dep-"*/boot.sh
+chmod 0755 "$dep_repo/modules/dep-a/check.sh"
 mkdir -p "$tmp/dep-root/etc"; printf 'ID=linux\nNAME=fixture\n' > "$tmp/dep-root/etc/os-release"
 if "$dep_repo/bin/ps5-cachyos-tools" install --root "$tmp/dep-root" --module dep-b >/tmp/ps5-tools-deps.out 2>&1 && test -f "$tmp/dep-root/etc/dep-a.marker" && test -f "$tmp/dep-root/etc/dep-b.marker" && test "$(cat "$tmp/dep-root/var/lib/ps5-cachyos-tools/dep-a.count")" = 1 && "$dep_repo/bin/ps5-cachyos-tools" install --root "$tmp/dep-root" --module dep-b >/tmp/ps5-tools-deps-reinstall.out 2>&1 && test "$(cat "$tmp/dep-root/var/lib/ps5-cachyos-tools/dep-a.count")" = 1; then ok 'installazione selettiva include e riusa dipendenze valide'; else no 'installazione selettiva salta o reinstalla una dipendenza'; fi
 printf '#!/usr/bin/env bash\nprintf corrupted > "$1/etc/dep-a.marker"\n' > "$tmp/dep-root/usr/lib/ps5-cachyos-tools/modules/dep-a/install.sh"; chmod 0755 "$tmp/dep-root/usr/lib/ps5-cachyos-tools/modules/dep-a/install.sh"

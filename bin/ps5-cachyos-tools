@@ -14,12 +14,13 @@ source "$BASE/lib/core/log.sh" 2>/dev/null || source "$BASE/core/log.sh"; source
 usage() { printf '%s\n' 'uso: ps5-cachyos-tools list | install (--root ROOT [--boot BOOT]|--live) [--module ID] [--dry-run] [--no-start] | check (--root ROOT|--live) | status [--root ROOT|--live] | reset ID --root ROOT | reapply ID [--root ROOT|--live] | remove --module ID --root ROOT [--keep-config|--purge-config]'; }
 need_arg() { [ "$#" -ge 2 ] && [ -n "$2" ] && { printf '%s\n' "$2"; return 0; }; core_die "valore mancante per $1"; return 2; }
 core_cli_status() {
-    local root=$1 id f installed enabled type policy active readiness runtime_state state profile
+    local root=$1 id f installed enabled type policy active readiness runtime_state state profile present
     [ -d "$root/var/lib/ps5-cachyos-tools/state/modules" ] || return 1
     core_registry_discover "$root/usr/lib/ps5-cachyos-tools/modules" >/dev/null 2>&1 || true
     for id in "${CORE_MODULE_IDS[@]}"; do
         f="$root/var/lib/ps5-cachyos-tools/state/modules/$id.state"
         installed=no; [ -f "$root/usr/lib/ps5-cachyos-tools/modules/$id/module.conf" ] && installed=yes
+        present=no; [ -d "$root/usr/lib/ps5-cachyos-tools/modules/$id" ] && present=yes
         enabled=$(core_registry_field "$id" 1 2>/dev/null || echo unknown)
         type=$(core_registry_field "$id" 2 2>/dev/null || echo unknown)
         policy=$(core_registry_field "$id" 3 2>/dev/null || echo unknown)
@@ -36,7 +37,7 @@ core_cli_status() {
                 esac
             elif [ "$active" = no ]; then readiness=not-running; fi
         fi
-        printf '%s: installed=%s enabled=%s type=%s policy=%s present=yes active=%s readiness=%s ' "$id" "$installed" "$enabled" "$type" "$policy" "$active" "$readiness"
+        printf '%s: installed=%s enabled=%s type=%s policy=%s present=%s active=%s readiness=%s ' "$id" "$installed" "$enabled" "$type" "$policy" "$present" "$active" "$readiness"
         [ -f "$f" ] && awk -F= '$1=="status"||$1=="last_attempt_at"||$1=="completed_at"||$1=="last_boot_id"||$1=="reapply_requested"{printf "%s=%s ",$1,$2}' "$f"
         [ -f "$root/var/lib/ps5-cachyos-tools/state/reapply/$id.request" ] && printf 'reapply_requested=true '
         printf '\n'
@@ -61,6 +62,7 @@ main() {
     fi
     if [ "$cmd" = status ] && [ -n "$root" ]; then
         root=$(core_target_validate_offline "$root") || return 1
+        CORE_CONFIG_ROOT="$root"
         core_registry_discover "$root/usr/lib/ps5-cachyos-tools/modules" >/dev/null || return 1
     fi
     if [ "$cmd" = status ]; then

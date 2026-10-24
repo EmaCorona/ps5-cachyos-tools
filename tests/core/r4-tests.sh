@@ -36,6 +36,20 @@ if CORE_CONFIG_ROOT="$root" core_install_preflight "$root" "$repo" fan >/dev/nul
     else
         no 'remove lascia una richiesta reapply pendente'
     fi
+
+failed_remove="$tmp/failed-remove"; mkdir -p "$failed_remove/etc"; printf 'ID=linux\nNAME=r4\n' > "$failed_remove/etc/os-release"
+"$repo/bin/ps5-cachyos-tools" install --root "$failed_remove" --module fan >/dev/null 2>&1
+mkdir -p "$failed_remove/var/lib/ps5-cachyos-tools/state/reapply"
+printf 'id=fan\nphase=normal\nrevision=1\nrequested_at=100\n' > "$failed_remove/var/lib/ps5-cachyos-tools/state/reapply/fan.request"
+printf '#!/usr/bin/env bash\nprintf failure > "$1/etc/fan-remove-failure"\nexit 23\n' > "$failed_remove/usr/lib/ps5-cachyos-tools/modules/fan/remove.sh"
+chmod 0755 "$failed_remove/usr/lib/ps5-cachyos-tools/modules/fan/remove.sh"
+if "$failed_remove/usr/local/bin/ps5-cachyos-tools" remove fan --root "$failed_remove" --keep-config >/dev/null 2>&1; then
+    no 'remove fallito accettato'
+elif [ -f "$failed_remove/var/lib/ps5-cachyos-tools/state/reapply/fan.request" ]; then
+    ok 'rollback remove ripristina la richiesta reapply'
+else
+    no 'rollback remove ha perso la richiesta reapply'
+fi
 else
     no 'fixture fan R4 non installabile'
 fi
@@ -58,6 +72,17 @@ elif [ ! -e "$rollback_root/etc/ps5-fan/state" ] && [ ! -e "$rollback_root/usr/l
     ok 'rollback install rimuove i file fan creati dalla transazione'
 else
     no 'rollback install lascia file fan creati dalla transazione'
+fi
+
+escape_root="$tmp/escape-root"; outside="$tmp/outside"; backup="$tmp/escape-backup"
+mkdir -p "$escape_root/etc" "$outside" "$backup"; printf sentinel > "$outside/sentinel"; ln -s "$outside" "$escape_root/etc/evil"
+printf '/etc/evil/sentinel\n' > "$backup/.paths"; : > "$backup/.present"
+if core_txn_restore "$escape_root" "$backup" >/dev/null 2>&1; then
+    no 'rollback ha seguito un antenato symlinkato'
+elif [ "$(cat "$outside/sentinel")" = sentinel ]; then
+    ok 'rollback rifiuta escape symlink senza toccare la sentinella esterna'
+else
+    no 'rollback ha modificato la sentinella esterna'
 fi
 
 printf '%s\n' "$pass test R4 superati, $fail falliti"

@@ -29,11 +29,11 @@ core_install_copy() {
 }
 
 core_install_module_valid() {
-    local root=$1 repo=$2 id=$3 path source target unit
+    local root=$1 repo=$2 id=$3 path source target unit check unknown
     local target_conf="$root/usr/lib/ps5-cachyos-tools/modules/$id/module.conf"
     [ -f "$target_conf" ] && [ ! -L "$target_conf" ] && cmp -s -- "$repo/modules/$id/module.conf" "$target_conf" || return 1
     [ "$(stat -c '%a' "$target_conf" 2>/dev/null)" = 644 ] || return 1
-    for path in install.sh boot.sh check.sh remove.sh readiness.sh; do
+    for path in install.sh boot.sh check.sh remove.sh readiness.sh runtime.sh; do
         source="$repo/modules/$id/$path"; target="$root/usr/lib/ps5-cachyos-tools/modules/$id/$path"
         if [ -e "$source" ]; then
             [ -f "$target" ] && [ ! -L "$target" ] && cmp -s -- "$source" "$target" || return 1
@@ -65,10 +65,23 @@ core_install_module_valid() {
                 [ "$(stat -c '%a' "$root$path" 2>/dev/null)" = 644 ] || return 1 ;;
         esac
     done
+    check="$root/usr/lib/ps5-cachyos-tools/modules/$id/check.sh"
+    if [ -x "$check" ]; then
+        CORE_INSTALL_MODE=offline CORE_TARGET_ROOT="$root" CORE_MODULE_ID="$id" "$check" "$root" || return 1
+    else
+        unknown=0
+        for path in $(core_registry_field "$id" 10); do
+            case "$path" in
+                /etc/systemd/system/*.service|/etc/systemd/system/multi-user.target.wants/*.service|/usr/lib/ps5-cachyos-tools/fan.sh|/usr/lib/ps5-cachyos-tools/lib/modules/fan.sh|/usr/local/bin/*|/etc/udev/rules.d/*) ;;
+                *) unknown=1; break;;
+            esac
+        done
+        [ "$unknown" -eq 0 ] || return 1
+    fi
 }
 
 core_install_body() {
-    local root=$1 repo=$2 module=${3-} moddir id hook path lock_dir target rc core_src fan_src requires_boot order type identity install_disabled readiness_hook
+    local root=$1 repo=$2 module=${3-} moddir id hook path lock_dir target rc core_src fan_src requires_boot order type identity install_disabled readiness_hook runtime_hook pre_order pre_id
     [ -d "$repo/lib/core" ] && core_src="$repo/lib/core" || core_src="$repo/core"
     [ -f "$repo/lib/modules/fan.sh" ] && fan_src="$repo/lib/modules/fan.sh" || fan_src="$repo/modules/fan.sh"
     CORE_CONFIG_ROOT=${CORE_CONFIG_ROOT:-$root}
@@ -121,11 +134,20 @@ core_install_body() {
     core_registry_validate_owned_paths || return 1
     core_registry_validate_dependencies || return 1
     [ -z "$module" ] || [ "${CORE_MODULE[$module]+x}" = x ] || { core_log "modulo sconosciuto: $module"; return 1; }
+    pre_order=$(core_registry_selection_order "$module") || return 1
+    while IFS= read -r pre_id; do
+        [ -n "$pre_id" ] || continue
+        runtime_hook=$(core_registry_field "$pre_id" 14)
+        [ -n "$runtime_hook" ] || continue
+        [ -f "$repo/modules/$pre_id/$runtime_hook" ] && [ ! -L "$repo/modules/$pre_id/$runtime_hook" ] && [ -x "$repo/modules/$pre_id/$runtime_hook" ] || { core_log "runtime hook non valido: $pre_id/$runtime_hook"; return 1; }
+        rm -f -- "$root/run/ps5-cachyos-tools/runtime-changed/$pre_id"
+        CORE_REPO="$repo" CORE_INSTALL_MODE="${CORE_INSTALL_MODE:-offline}" CORE_TARGET_ROOT="$root" CORE_BOOT_TARGET="${CORE_BOOT_TARGET:-}" CORE_MODULE_ID="$pre_id" CORE_RUNTIME_CHANGED_FILE="$root/run/ps5-cachyos-tools/runtime-changed/$pre_id" CORE_FRAMEWORK_MANAGED=1 CORE_DRY_RUN=0 "$repo/modules/$pre_id/$runtime_hook" "$root" || return $?
+    done <<< "$pre_order"
     order=$(core_registry_selection_order "$module") || return 1
     while IFS= read -r id; do [ -n "$id" ] || continue; moddir="$repo/modules/$id"
         [ -d "$moddir" ] || return 1
         [ -f "$moddir/module.conf" ] && [ ! -L "$moddir/module.conf" ] || return 1
-        for hook in install.sh boot.sh check.sh remove.sh readiness.sh; do [ ! -L "$moddir/$hook" ] || { core_log "hook symlink non trusted: $id/$hook"; return 1; }; done
+        for hook in install.sh boot.sh check.sh remove.sh readiness.sh runtime.sh; do [ ! -L "$moddir/$hook" ] || { core_log "hook symlink non trusted: $id/$hook"; return 1; }; done
         CORE_REGISTRY_ROOT="$repo/modules" core_registry_discover "$repo/modules" >/dev/null || return 1
         [ "${CORE_MODULE[$id]+x}" = x ] || return 1
         requires_boot=$(core_registry_field "$id" 9)
@@ -147,13 +169,17 @@ core_install_body() {
         fi
         mkdir -p "$root/usr/lib/ps5-cachyos-tools/modules/$id" || return 1
         core_install_copy "$moddir/module.conf" "$root/usr/lib/ps5-cachyos-tools/modules/$id/module.conf" 644 || return 1
-        for hook in install.sh boot.sh check.sh remove.sh readiness.sh; do
+        for hook in install.sh boot.sh check.sh remove.sh readiness.sh runtime.sh; do
             if [ -e "$moddir/$hook" ]; then
                 [ -f "$moddir/$hook" ] && [ ! -L "$moddir/$hook" ] || { core_log "hook non regolare: $id/$hook"; return 1; }
                 target=$(core_target_path "$root" "/usr/lib/ps5-cachyos-tools/modules/$id/$hook") || return 1
                 core_install_copy "$moddir/$hook" "$target" 755 || { core_log "installazione hook fallita: $id/$hook"; return 1; }
             fi
         done
+        if [ -n "$readiness_hook" ]; then
+            target="$root/usr/lib/ps5-cachyos-tools/modules/$id/$readiness_hook"
+            [ -f "$target" ] && [ ! -L "$target" ] && [ -x "$target" ] && cmp -s -- "$moddir/$readiness_hook" "$target" || { core_log "readiness hook non verificato dopo la copia: $id"; return 1; }
+        fi
         enabled=$(core_registry_field "$id" 1)
         install_disabled=$(core_registry_field "$id" 12)
         rm -f -- "$root/run/ps5-cachyos-tools/runtime-changed/$id"
@@ -211,8 +237,10 @@ core_txn_restore() {
     local root=$1 backup=$2 path dir result=0
     while IFS= read -r path; do
         [ -n "$path" ] || continue
+        core_target_validate_final "$root" "$path" "$root$path" || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-paths"; continue; }
         rm -rf -- "$root$path" || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-paths"; }
         if grep -Fxq "$path" "$backup/.present" 2>/dev/null; then
+            core_target_assert_parents "$root" "$path" || { result=1; continue; }
             mkdir -p "$root$(dirname "$path")" || result=1
             cp -a -- "$backup$path" "$root$path" || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-paths"; }
         fi
@@ -228,7 +256,7 @@ core_txn_restore() {
 }
 
 core_install_preflight() {
-    local root=$1 repo=$2 module=${3-} id dep moddir type requires_boot unit order readiness_hook
+    local root=$1 repo=$2 module=${3-} id dep moddir type requires_boot unit order readiness_hook runtime_hook
     core_registry_discover "$repo/modules" >/dev/null || return 1
     core_registry_validate_dependencies || return 1
     core_registry_validate_owned_paths || return 1
@@ -249,6 +277,10 @@ core_install_preflight() {
         readiness_hook=$(core_registry_field "$id" 11)
         if [ -n "$readiness_hook" ]; then
             [ -f "$moddir/$readiness_hook" ] && [ ! -L "$moddir/$readiness_hook" ] && [ -x "$moddir/$readiness_hook" ] || { core_log "readiness hook non valido: $id/$readiness_hook"; return 1; }
+        fi
+        runtime_hook=$(core_registry_field "$id" 14)
+        if [ -n "$runtime_hook" ]; then
+            [ -f "$moddir/$runtime_hook" ] && [ ! -L "$moddir/$runtime_hook" ] && [ -x "$moddir/$runtime_hook" ] || { core_log "runtime hook non valido: $id/$runtime_hook"; return 1; }
         fi
     done <<< "$order"
 }
@@ -330,8 +362,10 @@ core_remove_restore() {
     local root=$1 backup=$2 path result=0
     while IFS= read -r path; do
         [ -n "$path" ] || continue
+        core_target_validate_final "$root" "$path" "$root$path" || { result=1; continue; }
         rm -rf -- "$root$path" || result=1
         if grep -Fxq "$path" "$backup/.present" 2>/dev/null; then
+            core_target_assert_parents "$root" "$path" || { result=1; continue; }
             mkdir -p "$root$(dirname "$path")" || result=1
             cp -a -- "$backup$path" "$root$path" || result=1
         fi
