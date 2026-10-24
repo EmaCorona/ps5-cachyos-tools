@@ -234,7 +234,7 @@ module_fan_wait_ready() {
         [ "$pid" -gt 0 ] 2>/dev/null && kill -0 "$pid" 2>/dev/null || { sleep 1; continue; }
         cycles=$(awk -F= '$1=="cycles"{print $2}' "$state" 2>/dev/null || true); updated_at=$(awk -F= '$1=="updated_at"{print $2}' "$state" 2>/dev/null || true); instance_id=$(awk -F= '$1=="instance_id"{print $2}' "$state" 2>/dev/null || true)
         now=$(date +%s)
-        if [ -r "$state" ] && [ "$cycles" -ge 1 ] 2>/dev/null && [ "$updated_at" -ge "$((now - 300))" ] 2>/dev/null && [ -n "$instance_id" ] && [ "$instance_id" != none ] && grep -Eq '^state=(NORMAL|HEATING|EMERGENCY|DEGRADED)$' "$state" && grep -Eq '^profile_applied=(low|balanced|high)$' "$state"; then
+        if [ -r "$state" ] && [ "$cycles" -ge 1 ] 2>/dev/null && [ "$updated_at" -ge "$((now - 300))" ] 2>/dev/null && [ "$updated_at" -le "$now" ] 2>/dev/null && [ -n "$instance_id" ] && [ "$instance_id" != none ] && grep -Eq '^state=(NORMAL|HEATING|EMERGENCY|DEGRADED)$' "$state" && grep -Eq '^profile_applied=(low|balanced|high)$' "$state"; then
             if [ "$restarted" -eq 1 ]; then [ "$previous_pid" -eq 0 ] || [ "$pid" -ne "$previous_pid" ] || { sleep 1; continue; }; [ -z "$previous_instance" ] || [ "$instance_id" != "$previous_instance" ] || { sleep 1; continue; }; else [ "$previous_pid" -eq 0 ] || [ "$pid" -eq "$previous_pid" ] || { sleep 1; continue; }; [ -z "$previous_instance" ] || [ "$instance_id" = "$previous_instance" ] || { sleep 1; continue; }; [ "$cycles" -gt "$previous_cycles" ] 2>/dev/null || { sleep 1; continue; }; fi
             grep -q '^state=DEGRADED$' "$state" && return 2
             return 0
