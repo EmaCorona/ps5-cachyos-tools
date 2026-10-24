@@ -19,8 +19,14 @@ runner_request_exists() {
     [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
     core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/reapply || return 1
     exec {fd}<"$dir" || return 1; expected=$(realpath -e -- "$dir") || { exec {fd}<&-; return 1; }; actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }; [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
-    [ -f "/proc/self/fd/$fd/$id.request" ] && result=0
+    [ ! -L "/proc/self/fd/$fd/$id.request" ] && [ -f "/proc/self/fd/$fd/$id.request" ] && result=0
     exec {fd}<&-; return "$result"
+}
+runner_remove_request() {
+    local root=$1 id=$2 dir fd expected actual file; dir="$root/var/lib/ps5-cachyos-tools/state/reapply"
+    [ -d "$dir" ] && [ ! -L "$dir" ] || return 1; core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/reapply || return 1
+    exec {fd}<"$dir" || return 1; expected=$(realpath -e -- "$dir") || { exec {fd}<&-; return 1; }; actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }; [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
+    file="/proc/self/fd/$fd/$id.request"; [ ! -L "$file" ] && rm -f -- "$file"; local rc=$?; exec {fd}<&-; return "$rc"
 }
 runner_execute_hook() {
     local root=$1 id=$2 phase=$3 hook=$4 expected actual hook_fd rc
@@ -30,7 +36,7 @@ runner_execute_hook() {
     core_target_validate_final "$root" "/usr/lib/ps5-cachyos-tools/modules/$id/boot.sh" "$hook" || { exec {hook_fd}<&-; return 127; }
     CORE_INSTALL_MODE=live CORE_TARGET_ROOT="$root" CORE_MODULE_ID="$id" CORE_BOOT_PHASE="$phase" bash "/proc/self/fd/$hook_fd" "$root" "$phase"; rc=$?; exec {hook_fd}<&-; return "$rc"
 }
-runner_lock() { local lock_dir="$CORE_RUN_ROOT/run/ps5-cachyos-tools"; core_state_validate_path "$CORE_RUN_ROOT" /run/ps5-cachyos-tools || return 1; mkdir -p "$lock_dir" || return 1; core_state_validate_path "$CORE_RUN_ROOT" /run/ps5-cachyos-tools || return 1; exec 11<"$lock_dir" || return 1; [ "$(readlink -e /proc/self/fd/11 2>/dev/null)" = "$(realpath -e -- "$lock_dir" 2>/dev/null)" ] || { exec 11<&-; return 1; }; exec 7>"/proc/self/fd/11/transaction.lock" || { exec 11<&-; return 1; }; exec 11<&-; flock -n 7 || { core_log 'transazione amministrativa già attiva'; return 1; }; core_state_validate_path "$CORE_RUN_ROOT" /run/ps5-cachyos-tools || return 1; exec 11<"$lock_dir" || return 1; [ "$(readlink -e /proc/self/fd/11 2>/dev/null)" = "$(realpath -e -- "$lock_dir" 2>/dev/null)" ] || { exec 11<&-; return 1; }; exec 9>"/proc/self/fd/11/runner.lock" || { exec 11<&-; return 1; }; exec 11<&-; flock -n 9 || { core_log 'runner già attivo'; return 1; }; }
+runner_lock() { local lock_dir="$CORE_RUN_ROOT/run/ps5-cachyos-tools"; core_state_validate_path "$CORE_RUN_ROOT" /run/ps5-cachyos-tools || return 1; [ -d "$lock_dir" ] && [ ! -L "$lock_dir" ] || return 1; core_state_validate_path "$CORE_RUN_ROOT" /run/ps5-cachyos-tools || return 1; exec 11<"$lock_dir" || return 1; [ "$(readlink -e /proc/self/fd/11 2>/dev/null)" = "$(realpath -e -- "$lock_dir" 2>/dev/null)" ] || { exec 11<&-; return 1; }; exec 7>"/proc/self/fd/11/transaction.lock" || { exec 11<&-; return 1; }; exec 11<&-; flock -n 7 || { core_log 'transazione amministrativa già attiva'; return 1; }; core_state_validate_path "$CORE_RUN_ROOT" /run/ps5-cachyos-tools || return 1; exec 11<"$lock_dir" || return 1; [ "$(readlink -e /proc/self/fd/11 2>/dev/null)" = "$(realpath -e -- "$lock_dir" 2>/dev/null)" ] || { exec 11<&-; return 1; }; exec 9>"/proc/self/fd/11/runner.lock" || { exec 11<&-; return 1; }; exec 11<&-; flock -n 9 || { core_log 'runner già attivo'; return 1; }; }
 runner_wait_service() {
     local unit=$1 attempt deadline=${CORE_RUNNER_DEADLINE:-0} now
     [ "$CORE_STATE_ROOT" = / ] || return 1
@@ -70,7 +76,7 @@ runner_module() {
        [ "$(core_state_get "$CORE_STATE_ROOT" completed_revision "$id")" = "$rev" ] &&
        [ "$(core_state_get "$CORE_STATE_ROOT" reapply_applied_id "$id")" = "$request_id" ]; then
         core_state_validate_path "$CORE_STATE_ROOT" "/var/lib/ps5-cachyos-tools/state/reapply/$id.request" || return 1
-        rm -f -- "$request_file" || return 1
+        runner_remove_request "$CORE_STATE_ROOT" "$id" || return 1
         core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot" || return 1
         return 0
     fi
@@ -79,7 +85,7 @@ runner_module() {
        [ -n "$request_id" ] && [ "$(core_state_get "$CORE_STATE_ROOT" reapply_applied_id "$id")" = "$request_id" ]; then
             core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot" || return 1
             core_state_validate_path "$CORE_STATE_ROOT" "/var/lib/ps5-cachyos-tools/state/reapply/$id.request" || return 1
-            rm -f -- "$request_file" || return 1
+            runner_remove_request "$CORE_STATE_ROOT" "$id" || return 1
             core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot" || return 1
             return 0
     fi
@@ -113,7 +119,7 @@ runner_module() {
         fi
         core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot" || return 1
         if [ "$request" -eq 1 ]; then
-            if core_state_validate_path "$CORE_STATE_ROOT" "/var/lib/ps5-cachyos-tools/state/reapply/$id.request" && rm -f -- "$request_file"; then
+            if runner_remove_request "$CORE_STATE_ROOT" "$id"; then
                 core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot" || { core_log "$id: richiesta consumata ma stato da riconciliare"; printf 'id=%s\nphase=%s\nrevision=%s\nrequested_at=%s\n' "$id" "$phase" "$rev" "$(date +%s)" > "$request_file"; return 1; }
             else
                 core_log "$id: impossibile consumare la richiesta di reapply"; return 1

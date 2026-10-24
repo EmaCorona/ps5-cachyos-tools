@@ -139,12 +139,20 @@ core_service_readiness() {
     [ -n "$hook" ] || return 0
     hook="${CORE_PREFIX:-/usr/lib/ps5-cachyos-tools}/modules/$id/$hook"
     [ -x "$hook" ] || { core_log "readiness hook assente: $id"; return 1; }
+    local hook_fd expected actual current part
+    expected=$(realpath -e -- "$hook") || return 1
+    [ -f "$hook" ] && [ ! -L "$hook" ] || return 1
+    current=/; IFS=/ read -ra hook_parts <<< "${hook#/}"; for part in "${hook_parts[@]}"; do [ -n "$part" ] || continue; current="${current%/}/$part"; [ "$current" = "$hook" ] && break; [ ! -L "$current" ] || return 1; done
+    exec {hook_fd}<"$hook" || return 1
+    actual=$(readlink -e -- "/proc/self/fd/$hook_fd") || { exec {hook_fd}<&-; return 1; }
+    [ "$actual" = "$expected" ] || { exec {hook_fd}<&-; return 1; }
+    [ ! -L "$hook" ] || { exec {hook_fd}<&-; return 1; }
     CORE_INSTALL_MODE=live CORE_MODULE_ID="$id" \
         CORE_SERVICE_PRE_PID="${CORE_SERVICE_PRE_PID:-0}" \
         CORE_SERVICE_PRE_CYCLES="${CORE_SERVICE_PRE_CYCLES:-0}" \
         CORE_SERVICE_PRE_INSTANCE="${CORE_SERVICE_PRE_INSTANCE:-}" \
         CORE_SERVICE_RESTARTED="${CORE_SERVICE_RESTARTED:-0}" \
-        "$hook" "$root"; rc=$?
+        bash "/proc/self/fd/$hook_fd" "$root"; rc=$?; exec {hook_fd}<&-
     case "$rc" in
         0) CORE_SERVICE_READINESS_STATUS=ready; return 0 ;;
         2) CORE_SERVICE_READINESS_STATUS=degraded; core_log "readiness applicativa degradata: $id"; return 0 ;;

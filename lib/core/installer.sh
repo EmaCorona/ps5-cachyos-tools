@@ -4,7 +4,7 @@ set -u
 core_txn_lock() {
     local root=$1 lock_dir="$1/run/ps5-cachyos-tools"
     core_target_validate_final "$root" /run/ps5-cachyos-tools "$root/run/ps5-cachyos-tools" || return 1
-    mkdir -p "$lock_dir" || return 1
+    [ -d "$lock_dir" ] && [ ! -L "$lock_dir" ] || return 1
     core_target_validate_final "$root" /run/ps5-cachyos-tools "$lock_dir" || return 1
     exec 10<"$lock_dir" || return 1
     [ "$(readlink -e /proc/self/fd/10 2>/dev/null)" = "$(realpath -e -- "$lock_dir" 2>/dev/null)" ] || { exec 10<&-; return 1; }
@@ -304,6 +304,8 @@ core_install() {
     local root=$1 backup path rollback_status=ROLLBACK_PARTIAL service_rollback_failed=0 filesystem_restore_failed=0
     CORE_CONFIG_ROOT=${CORE_CONFIG_ROOT:-$root}
     core_install_preflight "$root" "$2" "${3-}" || return 1
+    core_target_prepare_dir "$root" /run/ps5-cachyos-tools >/dev/null || return 1
+    core_target_prepare_dir "$root" /var/lib/ps5-cachyos-tools/state/reapply >/dev/null || return 1
     core_txn_lock "$root" || return 1
     backup=$(mktemp -d "$root/.ps5-cachyos-tools-txn.XXXXXX") || return 1
     core_txn_snapshot "$root" "$backup" "$2" "${3-}" || { core_log 'snapshot transazione fallito'; rm -rf -- "$backup"; return 1; }
