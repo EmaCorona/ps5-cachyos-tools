@@ -40,4 +40,4 @@ Eseguiti direttamente: `bash -n` sui file modificati, `./tests/core/run-tests.sh
 
 ## Fonte
 
-La correzione appartiene al branch `feature/modular-tools-framework` del repository `EmaCorona/ps5-cachyos-tools`; il riferimento SHA definitivo viene associato dopo il commit del codice e verificato nel successivo aggiornamento dello storico.
+Commit sorgente: [`ed240b2bbc7024c1871b6fabb45279cb01049db3`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/ed240b2bbc7024c1871b6fabb45279cb01049db3), branch `feature/modular-tools-framework`.
