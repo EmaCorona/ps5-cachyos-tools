@@ -14,7 +14,7 @@ source "$BASE/lib/core/log.sh" 2>/dev/null || source "$BASE/core/log.sh"; source
 usage() { printf '%s\n' 'uso: ps5-cachyos-tools list | install (--root ROOT [--boot BOOT]|--live) [--module ID] [--dry-run] [--no-start] | check (--root ROOT|--live) | status [--root ROOT|--live] | reset ID --root ROOT | reapply ID [--root ROOT|--live] | remove --module ID --root ROOT [--keep-config|--purge-config]'; }
 need_arg() { [ "$#" -ge 2 ] && [ -n "$2" ] && { printf '%s\n' "$2"; return 0; }; core_die "valore mancante per $1"; return 2; }
 core_cli_status() {
-    local root=$1 id f installed enabled type policy active readiness runtime_state state profile present
+    local root=$1 id f installed enabled type policy active readiness runtime_state state profile present pid cycles updated_at instance_id now
     [ -d "$root/var/lib/ps5-cachyos-tools/state/modules" ] || return 1
     core_registry_discover "$root/usr/lib/ps5-cachyos-tools/modules" >/dev/null 2>&1 || true
     for id in "${CORE_MODULE_IDS[@]}"; do
@@ -30,15 +30,24 @@ core_cli_status() {
             if [ "$active" = yes ] && [ "$id" = fan ] && [ -r /run/ps5-fan/runtime.state ]; then
                 runtime_state=$(awk -F= '$1=="state"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || true)
                 profile=$(awk -F= '$1=="profile_applied"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || true)
-                case "$profile" in
-                    low|balanced|high)
-                        case "$runtime_state" in
-                            NORMAL|HEATING|EMERGENCY) readiness=ready ;;
-                            DEGRADED) readiness=degraded ;;
-                            *) readiness=not-ready ;;
-                        esac ;;
-                    *) readiness=not-ready ;;
-                esac
+                pid=$(systemctl show -p MainPID --value ps5-fan-daemon.service 2>/dev/null || true)
+                cycles=$(awk -F= '$1=="cycles"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || true)
+                updated_at=$(awk -F= '$1=="updated_at"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || true)
+                instance_id=$(awk -F= '$1=="instance_id"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || true)
+                now=$(date +%s)
+                if [ "$pid" -gt 0 ] 2>/dev/null && kill -0 "$pid" 2>/dev/null && [ "$cycles" -ge 1 ] 2>/dev/null && [ "$updated_at" -ge $((now - 300)) ] 2>/dev/null && [ "$updated_at" -le "$now" ] 2>/dev/null && [ -n "$instance_id" ] && [ "$instance_id" != none ]; then
+                    case "$profile" in
+                        low|balanced|high)
+                            case "$runtime_state" in
+                                NORMAL|HEATING|EMERGENCY) readiness=ready ;;
+                                DEGRADED) readiness=degraded ;;
+                                *) readiness=not-ready ;;
+                            esac ;;
+                        *) readiness=not-ready ;;
+                    esac
+                else
+                    readiness=not-ready
+                fi
             elif [ "$active" = no ]; then readiness=not-running; fi
         fi
         printf '%s: installed=%s enabled=%s type=%s policy=%s present=%s active=%s readiness=%s ' "$id" "$installed" "$enabled" "$type" "$policy" "$present" "$active" "$readiness"

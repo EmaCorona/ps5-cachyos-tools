@@ -95,6 +95,22 @@ else
     no 'fixture backup fan non installabile'
 fi
 
+remove_etc_root="$tmp/remove-etc-root"; remove_etc_outside="$tmp/remove-etc-outside"
+mkdir -p "$remove_etc_root/etc" "$remove_etc_outside"; printf 'ID=linux\nNAME=r4\n' > "$remove_etc_root/etc/os-release"
+if "$repo/bin/ps5-cachyos-tools" install --root "$remove_etc_root" --module fan >/dev/null 2>&1; then
+    mv "$remove_etc_root/etc" "$remove_etc_outside/real-etc"
+    ln -s "$remove_etc_outside/real-etc" "$remove_etc_root/etc"
+    if (source "$remove_etc_root/usr/lib/ps5-cachyos-tools/fan.sh"; module_fan_remove "$remove_etc_root" 0) >/dev/null 2>&1; then
+        no 'remove standalone accetta antenato etc symlinkato'
+    elif [ -f "$remove_etc_outside/real-etc/ps5-fan/.ps5-cachyos-tools.manifest" ]; then
+        ok 'remove standalone rifiuta antenato etc symlinkato senza cancellare fuori root'
+    else
+        no 'remove standalone ha cancellato artefatti tramite etc symlinkato'
+    fi
+else
+    no 'fixture remove etc non installabile'
+fi
+
 rollback_root="$tmp/rollback-root"; mkdir -p "$rollback_root/etc"; printf 'ID=linux\nNAME=r4\n' > "$rollback_root/etc/os-release"
 rollback_repo="$tmp/rollback-repo"; cp -a "$ROOT/." "$rollback_repo"
 cat > "$rollback_repo/modules/fan/install.sh" <<'EOF'

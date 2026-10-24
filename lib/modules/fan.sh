@@ -240,6 +240,7 @@ module_fan_remove() {
         current="${current%/}/$part"
         [ ! -L "$current" ] || { echo "fan: antenato root symlink non autorizzato: $current" >&2; return 1; }
     done
+    module_fan_validate_write_set "$root" || return 1
     manifest=$(module_fan_manifest_path "$root")
     module_fan_validate_manifest "$root" || return 1
     module_fan_check_removal_permissions "$root" || return 1
