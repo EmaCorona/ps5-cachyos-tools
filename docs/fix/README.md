@@ -1,5 +1,7 @@
 # Registro fix
 
+- 2026-10-24 — [completamento framework modulare](fix-modular-framework-completion.md): transazioni con ownership, CLI installata, stato once/always, override e isolamento target; CI remota e hardware ancora da verificare.
+
 - 2026-10-24 — [refactor del framework modulare](fix-modular-framework.md): discovery, target offline/live, state store e runner iniziali; validazione hardware ancora da eseguire.
 
 - 2026-10-24 — [`3392ca1`](fix-3392ca142be6f-profile-state-required.md): daemon e readiness rifiutano lo stato profilo assente.

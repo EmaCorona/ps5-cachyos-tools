@@ -1,6 +1,6 @@
 # Modulo ventole
 
-`lib/modules/fan.sh` installa esclusivamente i componenti del progetto autonomo. Il demone identifica il sensore APU/Tctl per nome e label, applica la curva del profilo persistente e scrive soltanto il file `target_temp` configurato.
+`modules/fan/` espone il modulo di tipo `service`; il framework lo scopre dal manifest e delega l'installazione all'adapter `lib/modules/fan.sh`, che installa esclusivamente i componenti del progetto autonomo. Il demone identifica il sensore APU/Tctl per nome e label, applica la curva del profilo persistente e scrive soltanto il file `target_temp` configurato.
 
 La perdita dei sensori o del readback non usa una temperatura inventata: lo stato diventa `DEGRADED`, la zona diventa `unknown`, il target desiderato resta conservativo e un target hardware valido più basso ha sempre precedenza. Lo stato runtime distingue `target_desired`, `target_observed` e `target_last_verified`; quando il readback è invalido non viene pubblicato un target verificato. Il ritorno a `NORMAL` richiede almeno due campioni validi consecutivi (`RECOVERY_VALID_SAMPLES`). Le scritture PWM hwmon sono intenzionalmente escluse.
 

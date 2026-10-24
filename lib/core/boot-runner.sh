@@ -5,6 +5,7 @@ CORE_PREFIX=${CORE_PREFIX:-/usr/lib/ps5-cachyos-tools}
 CORE_MODULE_ROOT="$CORE_PREFIX/modules"
 CORE_STATE_ROOT=${CORE_STATE_ROOT:-/}
 CORE_RUN_ROOT=${CORE_RUN_ROOT:-/}
+CORE_CONFIG_ROOT=${CORE_CONFIG_ROOT:-$CORE_STATE_ROOT}
 source "$CORE_PREFIX/core/log.sh"
 source "$CORE_PREFIX/core/registry.sh"
 source "$CORE_PREFIX/core/dependencies.sh"
@@ -20,8 +21,8 @@ runner_module() {
     [ "$boot_phase" = "$phase" ] || return 0
     boot=$(core_state_boot_id)
     state=$(core_state_get "$CORE_STATE_ROOT" status "$id") || { core_state_write "$CORE_STATE_ROOT" "$id" FAILED "$policy" "$rev" 65 "$boot"; return 1; }
-    if [ "$policy" = once ] && [ "$state" = SUCCESS ]; then
-        [ "$(core_state_get "$CORE_STATE_ROOT" revision "$id")" = "$rev" ] && return 0
+    if [ "$policy" = once ] && [ "$(core_state_get "$CORE_STATE_ROOT" completed_at "$id")" -gt 0 ] 2>/dev/null; then
+        [ "$(core_state_get "$CORE_STATE_ROOT" completed_revision "$id")" = "$rev" ] && return 0
         core_log "$id: revisione aggiornata, riesecuzione automatica sospesa; usare reapply/reset"
         return 0
     fi
@@ -30,13 +31,18 @@ runner_module() {
         [ "$(core_registry_field "$dep" 1)" = true ] || { core_state_write "$CORE_STATE_ROOT" "$id" BLOCKED_DEPENDENCY "$policy" "$rev" 66 "$boot"; return 0; }
         dep_state=$(core_state_get "$CORE_STATE_ROOT" status "$dep" 2>/dev/null || true)
         dep_type=$(core_registry_field "$dep" 2)
-        if [ "$dep_type" = task ] && [ "$dep_state" != SUCCESS ]; then core_state_write "$CORE_STATE_ROOT" "$id" BLOCKED_DEPENDENCY "$policy" "$rev" 66 "$boot"; return 0; fi
+        if [ "$dep_type" = task ]; then
+            [ "$dep_state" = SUCCESS ] || { core_state_write "$CORE_STATE_ROOT" "$id" BLOCKED_DEPENDENCY "$policy" "$rev" 66 "$boot"; return 0; }
+            [ "$(core_registry_field "$dep" 3)" != always ] || [ "$(core_state_get "$CORE_STATE_ROOT" last_boot_id "$dep")" = "$boot" ] || { core_state_write "$CORE_STATE_ROOT" "$id" BLOCKED_DEPENDENCY "$policy" "$rev" 66 "$boot"; return 0; }
+        elif [ "$dep_type" = service ]; then
+            [ "$CORE_STATE_ROOT" != / ] || systemctl is-active --quiet "$(core_registry_field "$dep" 7)" 2>/dev/null || { core_state_write "$CORE_STATE_ROOT" "$id" BLOCKED_DEPENDENCY "$policy" "$rev" 66 "$boot"; return 0; }
+        fi
     done
     hook="$CORE_MODULE_ROOT/$id/boot.sh"; [ -x "$hook" ] || { core_state_write "$CORE_STATE_ROOT" "$id" FAILED "$policy" "$rev" 127 "$boot"; return 1; }
     core_state_write "$CORE_STATE_ROOT" "$id" RUNNING "$policy" "$rev" 0 "$boot" || return 1
-    "$hook" "$CORE_STATE_ROOT" "$phase"; rc=$?
+    CORE_INSTALL_MODE=live CORE_TARGET_ROOT="$CORE_STATE_ROOT" CORE_MODULE_ID="$id" CORE_BOOT_PHASE="$phase" "$hook" "$CORE_STATE_ROOT" "$phase"; rc=$?
     if [ "$rc" -eq 0 ]; then core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot"; else core_state_write "$CORE_STATE_ROOT" "$id" FAILED "$policy" "$rev" "$rc" "$boot"; [ "$failure" = critical ] && return "$rc"; fi
     return 0
 }
-main() { { [ "$(id -u)" -eq 0 ] || [ "$CORE_STATE_ROOT" != / ]; } || return 1; local phase=${1:-normal} id order; case "$phase" in early|normal) ;; *) return 2;; esac; runner_lock || return 1; runner_load_registry || return 1; order=$(core_registry_order) || return 1; while IFS= read -r id; do [ -n "$id" ] || continue; runner_module "$id" "$phase" || return 1; done <<< "$order"; }
+main() { if [ "$(id -u)" -ne 0 ]; then case "${CORE_TEST_MODE:-0}:$CORE_STATE_ROOT:$CORE_RUN_ROOT" in 1:/tmp/ps5-tools-core.*:/tmp/ps5-tools-core.*) ;; *) core_log 'runner richiede root'; return 1;; esac; fi; local phase=${1:-normal} id order; case "$phase" in early|normal) ;; *) return 2;; esac; runner_lock || return 1; runner_load_registry || return 1; order=$(core_registry_order) || return 1; while IFS= read -r id; do [ -n "$id" ] || continue; runner_module "$id" "$phase" || return 1; done <<< "$order"; }
 main "${1:-normal}"

@@ -30,16 +30,31 @@ core_target_validate_offline() {
         [ "$boot" != / ] || { core_die 'mount boot non valido'; return 1; }
         core_target_realpath "$boot" >/dev/null || return 1
         [ -d "$boot" ] && [ -w "$boot" ] || { core_die "boot non scrivibile: $boot"; return 1; }
+        case "$boot/" in "$root/"*|"$root") ;; *) core_die 'partizione boot non associata alla rootfs target'; return 1;; esac
     fi
     printf '%s\n' "$root"
 }
 
 core_target_path() {
-    local root=$1 path=$2 resolved parent
+    local root=$1 path=$2 resolved parent full
     [[ "$path" = /* && "$path" != *'..'* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] || return 1
+    core_target_assert_parents "$root" "$path" || return 1
     parent=$(dirname "$root$path"); resolved=$(realpath -m -- "$parent" 2>/dev/null) || return 1
     case "$resolved/" in "$root/"*|"$root") ;; *) return 1;; esac
-    printf '%s\n' "$root$path"
+    full="$root$path"
+    if [ -e "$full" ] || [ -L "$full" ]; then
+        [ ! -L "$full" ] || return 1
+    fi
+    printf '%s\n' "$full"
+}
+
+core_target_prepare_dir() {
+    local root=$1 path=$2 full
+    full=$(core_target_path "$root" "$path") || return 1
+    [ ! -e "$full" ] || [ -d "$full" ] || return 1
+    mkdir -p -- "$full" || return 1
+    [ ! -L "$full" ] || return 1
+    printf '%s\n' "$full"
 }
 
 core_target_assert_parents() {

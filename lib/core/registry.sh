@@ -4,6 +4,7 @@ set -u
 CORE_REGISTRY_ROOT=${CORE_REGISTRY_ROOT:-}
 declare -a CORE_MODULE_IDS=()
 declare -A CORE_MODULE=()
+declare -A CORE_MODULE_OVERRIDE=()
 
 core_registry_unquote() {
     local value=${1-}
@@ -23,7 +24,7 @@ core_registry_parse_file() {
         [[ "$raw" =~ ^([A-Z][A-Z0-9_]*)=(.*)$ ]] || { core_log "manifest non valido: $file:$line_no"; return 1; }
         key=${BASH_REMATCH[1]}; value=$(core_registry_unquote "${BASH_REMATCH[2]}") || return 1
         case "$key" in
-            ID|NAME|ENABLED|TYPE|RUN_POLICY|BOOT_PHASE|REVISION|DEPENDENCIES|SERVICE_UNIT|FAILURE_POLICY|REQUIRES_BOOT) ;;
+            ID|NAME|ENABLED|TYPE|RUN_POLICY|BOOT_PHASE|REVISION|DEPENDENCIES|SERVICE_UNIT|FAILURE_POLICY|REQUIRES_BOOT|OWNED_PATHS) ;;
             *) core_log "chiave manifest non autorizzata: $key"; return 1;;
         esac
         [ -z "${data[$key]+x}" ] || { core_log "chiave duplicata: $key"; return 1; }
@@ -41,12 +42,13 @@ core_registry_parse_file() {
     for dep in ${data[DEPENDENCIES]-}; do [[ "$dep" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { core_log "dipendenza non valida: $id -> $dep"; return 1; }; done
     if [ -n "${data[SERVICE_UNIT]-}" ]; then [[ "${data[SERVICE_UNIT]}" =~ ^[a-zA-Z0-9_.@-]+\.service$ ]] || return 1; fi
     [ "${data[TYPE]}" != service ] || { [ "${data[RUN_POLICY]}" = always ] && [ -n "${data[SERVICE_UNIT]-}" ] || { core_log "servizio incoerente: $id"; return 1; }; }
-    CORE_MODULE[$id]=$(printf '%s\034' "${data[NAME]}" "${data[ENABLED]}" "${data[TYPE]}" "${data[RUN_POLICY]}" "${data[BOOT_PHASE]-normal}" "${data[REVISION]-1}" "${data[DEPENDENCIES]-}" "${data[SERVICE_UNIT]-}" "${data[FAILURE_POLICY]-continue}" "${data[REQUIRES_BOOT]-false}")
+    for path in ${data[OWNED_PATHS]-}; do [[ "$path" = /* && "$path" != *'..'* && "$path" != *$'\n'* ]] || { core_log "OWNED_PATHS non valido: $id"; return 1; }; done
+    CORE_MODULE[$id]=$(printf '%s\034' "${data[NAME]}" "${data[ENABLED]}" "${data[TYPE]}" "${data[RUN_POLICY]}" "${data[BOOT_PHASE]-normal}" "${data[REVISION]-1}" "${data[DEPENDENCIES]-}" "${data[SERVICE_UNIT]-}" "${data[FAILURE_POLICY]-continue}" "${data[REQUIRES_BOOT]-false}" "${data[OWNED_PATHS]-}")
 }
 
 core_registry_discover() {
     local root=$1 dir id
-    CORE_REGISTRY_ROOT=$root; CORE_MODULE_IDS=(); CORE_MODULE=()
+    CORE_REGISTRY_ROOT=$root; CORE_MODULE_IDS=(); CORE_MODULE=(); CORE_MODULE_OVERRIDE=()
     [ -d "$root" ] || { core_log "registry assente: $root"; return 1; }
     while IFS= read -r dir; do
         [ -f "$dir/module.conf" ] && [ ! -L "$dir/module.conf" ] || { core_log "manifest assente o symlink: $dir/module.conf"; return 1; }
@@ -55,13 +57,34 @@ core_registry_discover() {
         CORE_MODULE_IDS+=("$id")
     done < <(find "$root" -mindepth 1 -maxdepth 1 -type d ! -name '_*' -print | sort)
     [ "${#CORE_MODULE_IDS[@]}" -gt 0 ] || { core_log 'nessun modulo trovato'; return 1; }
+    core_registry_load_overrides "${CORE_CONFIG_ROOT:-/}" || return 1
     printf '%s\n' "${CORE_MODULE_IDS[@]}"
+}
+
+core_registry_load_overrides() {
+    local config_root=$1 id file raw key value
+    local dir="$config_root/etc/ps5-cachyos-tools/modules.d"
+    [ -d "$dir" ] || return 0
+    while IFS= read -r file; do
+        id=${file##*/}; id=${id%.conf}
+        [ "${CORE_MODULE[$id]+x}" = x ] || { core_log "override per modulo sconosciuto: $id"; return 1; }
+        while IFS= read -r raw || [ -n "$raw" ]; do
+            [ -z "$raw" ] && continue; [[ "$raw" == \#* ]] && continue
+            [[ "$raw" =~ ^(ENABLED|RUN_POLICY)=([^[:space:]]+)$ ]] || { core_log "override non valido: $file"; return 1; }
+            key=${BASH_REMATCH[1]}; value=${BASH_REMATCH[2]}
+            case "$key:$value" in ENABLED:true|ENABLED:false|RUN_POLICY:once|RUN_POLICY:always) ;; *) return 1;; esac
+            [ -z "${CORE_MODULE_OVERRIDE[$id:$key]+x}" ] || return 1
+            CORE_MODULE_OVERRIDE[$id:$key]=$value
+        done < "$file"
+    done < <(find "$dir" -maxdepth 1 -type f -name '*.conf' -print 2>/dev/null | sort)
 }
 
 core_registry_field() {
     local id=$1 index=$2 IFS=$'\034' value
     local -a fields
     read -r -a fields <<< "${CORE_MODULE[$id]}"
+    [ "$index" -ne 1 ] || [ -z "${CORE_MODULE_OVERRIDE[$id:ENABLED]+x}" ] || fields[1]=${CORE_MODULE_OVERRIDE[$id:ENABLED]}
+    [ "$index" -ne 3 ] || [ -z "${CORE_MODULE_OVERRIDE[$id:RUN_POLICY]+x}" ] || fields[3]=${CORE_MODULE_OVERRIDE[$id:RUN_POLICY]}
     printf '%s\n' "${fields[$index]-}"
 }
 core_registry_validate_dependencies() {
@@ -71,6 +94,7 @@ core_registry_validate_dependencies() {
         for dep in $deps; do
             [ "${CORE_MODULE[$dep]+x}" = x ] || { core_log "$id: dipendenza sconosciuta: $dep"; return 1; }
             [ "$(core_registry_field "$id" 4)" = early ] && [ "$(core_registry_field "$dep" 4)" = normal ] && { core_log "$id: dipendenza normal da fase early"; return 1; }
+            [ "$(core_registry_field "$dep" 2)" != service ] || [ -n "$(core_registry_field "$dep" 7)" ] || { core_log "$id: dipendenza service senza unit"; return 1; }
         done
     done
     return 0
