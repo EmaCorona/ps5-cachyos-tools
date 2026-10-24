@@ -170,7 +170,19 @@ module_fan_runtime_changed() {
         if [ "$root" = / ]; then runtime_path=$runtime_file; else case "$runtime_file" in "$root"/*) runtime_path=/${runtime_file#"$root"};; *) return 1;; esac; fi
         module_fan_validate_write_path "$root" "$runtime_path" || return 1
     fi
-    module_fan_mark_runtime_changed() { [ -z "$runtime_file" ] || { module_fan_validate_write_path "$root" "$runtime_path" || return 1; printf '1\n' > "$runtime_file"; }; }
+    module_fan_mark_runtime_changed() {
+        [ -z "$runtime_file" ] && return 0
+        local marker_dir=${runtime_file%/*} marker_name=${runtime_file##*/} marker_fd expected actual marker_tmp
+        module_fan_validate_write_path "$root" "$runtime_path" || return 1
+        exec {marker_fd}<"$marker_dir" || return 1
+        expected=$(realpath -e -- "$marker_dir") || { exec {marker_fd}<&-; return 1; }
+        actual=$(readlink -e -- "/proc/self/fd/$marker_fd") || { exec {marker_fd}<&-; return 1; }
+        [ "$actual" = "$expected" ] || { exec {marker_fd}<&-; return 1; }
+        marker_tmp=$(mktemp "/proc/self/fd/$marker_fd/.$marker_name.XXXXXX") || { exec {marker_fd}<&-; return 1; }
+        printf '1\n' > "$marker_tmp" || { rm -f -- "$marker_tmp"; exec {marker_fd}<&-; return 1; }
+        mv -f -- "$marker_tmp" "/proc/self/fd/$marker_fd/$marker_name" || { rm -f -- "$marker_tmp"; exec {marker_fd}<&-; return 1; }
+        exec {marker_fd}<&-
+    }
     for path in /usr/lib/ps5-cachyos-tools/fan.sh /usr/local/bin/ps5-fan /usr/local/bin/ps5-fan-daemon /usr/local/bin/ps5-temp /etc/systemd/system/ps5-fan-daemon.service /etc/udev/rules.d/99-ps5-fan.rules; do
         case "$path" in /usr/lib/ps5-cachyos-tools/fan.sh) source="$repo_dir/lib/modules/fan.sh";; /usr/local/bin/*) source="$repo_dir/bin/${path##*/}";; /etc/systemd/system/*) source="$repo_dir/systemd/${path##*/}";; /etc/udev/*) source="$repo_dir/systemd/${path##*/}";; esac
         full=$root$path; expected_mode=644; [[ "$path" == /usr/lib/* || "$path" == /usr/local/bin/* ]] && expected_mode=755

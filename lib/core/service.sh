@@ -82,7 +82,7 @@ core_service_restore_state() {
 }
 
 core_service_reapply() {
-    local root=$1 id=$2 unit dep dep_type policy revision boot rc=0 state_root=${CORE_STATE_ROOT:-$root} run_root=${CORE_RUN_ROOT:-$root} pre_pid=0 pre_cycles=0 pre_instance=''
+    local root=$1 id=$2 unit dep dep_type policy revision boot rc=0 state_root run_root pre_pid=0 pre_cycles=0 pre_instance=''; state_root=${CORE_STATE_ROOT:-$root}; run_root=${CORE_RUN_ROOT:-$root}
     [ "$root" = / ] || return 1
     unit=$(core_registry_field "$id" 7); [ -n "$unit" ] || return 1
     policy=$(core_registry_field "$id" 3); revision=$(core_registry_field "$id" 5); boot=$(core_state_boot_id)
@@ -153,7 +153,7 @@ core_service_readiness() {
 }
 
 core_service_runtime_changed() {
-    local root=$1 id=$2 marker="${CORE_RUNTIME_CHANGED_FILE:-$root/run/ps5-cachyos-tools/runtime-changed/$id}"
+    local root=$1 id=$2 marker; marker="${CORE_RUNTIME_CHANGED_FILE:-$root/run/ps5-cachyos-tools/runtime-changed/$id}"
     [ -f "$marker" ] && grep -qx '1' "$marker"
 }
 

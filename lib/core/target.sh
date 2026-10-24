@@ -167,7 +167,7 @@ core_target_boot_path() {
 }
 
 core_target_write_reapply_request() {
-    local root=$1 id=$2 phase=$3 revision=$4 dir="$root/var/lib/ps5-cachyos-tools/state/reapply" request_fd tmp expected actual
+    local root=$1 id=$2 phase=$3 revision=$4 dir request_fd tmp expected actual; dir="$root/var/lib/ps5-cachyos-tools/state/reapply"
     core_target_validate_final "$root" /var/lib/ps5-cachyos-tools/state/reapply "$dir" || return 1
     mkdir -p -- "$dir" || return 1
     core_target_validate_final "$root" /var/lib/ps5-cachyos-tools/state/reapply "$dir" || return 1

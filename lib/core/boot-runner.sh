@@ -8,11 +8,28 @@ CORE_RUN_ROOT=${CORE_RUN_ROOT:-/}
 CORE_CONFIG_ROOT=${CORE_CONFIG_ROOT:-$CORE_STATE_ROOT}
 CORE_REAPPLY_ID=${CORE_REAPPLY_ID:-}
 source "$CORE_PREFIX/core/log.sh"
+source "$CORE_PREFIX/core/target.sh"
 source "$CORE_PREFIX/core/registry.sh"
 source "$CORE_PREFIX/core/dependencies.sh"
 source "$CORE_PREFIX/core/state.sh"
 
 runner_load_registry() { core_registry_discover "$CORE_MODULE_ROOT" >/dev/null && core_registry_validate_dependencies; }
+runner_request_exists() {
+    local root=$1 id=$2 dir fd expected actual result=1; dir="$root/var/lib/ps5-cachyos-tools/state/reapply"
+    [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
+    core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/reapply || return 1
+    exec {fd}<"$dir" || return 1; expected=$(realpath -e -- "$dir") || { exec {fd}<&-; return 1; }; actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }; [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
+    [ -f "/proc/self/fd/$fd/$id.request" ] && result=0
+    exec {fd}<&-; return "$result"
+}
+runner_execute_hook() {
+    local root=$1 id=$2 phase=$3 hook=$4 expected actual hook_fd rc
+    expected=$(realpath -e -- "$hook") || return 127
+    core_target_validate_final "$root" "/usr/lib/ps5-cachyos-tools/modules/$id/boot.sh" "$hook" || return 127
+    exec {hook_fd}<"$hook" || return 127; actual=$(readlink -e -- "/proc/self/fd/$hook_fd") || { exec {hook_fd}<&-; return 127; }; [ "$actual" = "$expected" ] || { exec {hook_fd}<&-; return 127; }
+    core_target_validate_final "$root" "/usr/lib/ps5-cachyos-tools/modules/$id/boot.sh" "$hook" || { exec {hook_fd}<&-; return 127; }
+    CORE_INSTALL_MODE=live CORE_TARGET_ROOT="$root" CORE_MODULE_ID="$id" CORE_BOOT_PHASE="$phase" bash "/proc/self/fd/$hook_fd" "$root" "$phase"; rc=$?; exec {hook_fd}<&-; return "$rc"
+}
 runner_lock() { local lock_dir="$CORE_RUN_ROOT/run/ps5-cachyos-tools"; core_state_validate_path "$CORE_RUN_ROOT" /run/ps5-cachyos-tools || return 1; mkdir -p "$lock_dir" || return 1; core_state_validate_path "$CORE_RUN_ROOT" /run/ps5-cachyos-tools || return 1; exec 11<"$lock_dir" || return 1; [ "$(readlink -e /proc/self/fd/11 2>/dev/null)" = "$(realpath -e -- "$lock_dir" 2>/dev/null)" ] || { exec 11<&-; return 1; }; exec 7>"/proc/self/fd/11/transaction.lock" || { exec 11<&-; return 1; }; exec 11<&-; flock -n 7 || { core_log 'transazione amministrativa già attiva'; return 1; }; core_state_validate_path "$CORE_RUN_ROOT" /run/ps5-cachyos-tools || return 1; exec 11<"$lock_dir" || return 1; [ "$(readlink -e /proc/self/fd/11 2>/dev/null)" = "$(realpath -e -- "$lock_dir" 2>/dev/null)" ] || { exec 11<&-; return 1; }; exec 9>"/proc/self/fd/11/runner.lock" || { exec 11<&-; return 1; }; exec 11<&-; flock -n 9 || { core_log 'runner già attivo'; return 1; }; }
 runner_wait_service() {
     local unit=$1 attempt deadline=${CORE_RUNNER_DEADLINE:-0} now
@@ -36,9 +53,7 @@ runner_module() {
     enabled=$(core_registry_field "$id" 1); type=$(core_registry_field "$id" 2); policy=$(core_registry_field "$id" 3); boot_phase=$(core_registry_field "$id" 4); rev=$(core_registry_field "$id" 5); deps=$(core_registry_field "$id" 6); unit=$(core_registry_field "$id" 7); failure=$(core_registry_field "$id" 8)
     [ -z "$CORE_REAPPLY_ID" ] || [ "$CORE_REAPPLY_ID" = "$id" ] || return 0
     request_file="$CORE_STATE_ROOT/var/lib/ps5-cachyos-tools/state/reapply/$id.request"
-    core_state_validate_path "$CORE_STATE_ROOT" "/var/lib/ps5-cachyos-tools/state/reapply/$id.request" || return 1
-    [ -n "$CORE_REAPPLY_ID" ] || [ -f "$request_file" ] || true
-    [ -n "$CORE_REAPPLY_ID" ] || [ ! -f "$request_file" ] || request=1
+    [ -n "$CORE_REAPPLY_ID" ] || { runner_request_exists "$CORE_STATE_ROOT" "$id" && request=1 || true; }
     [ "$enabled" = true ] || { core_state_write "$CORE_STATE_ROOT" "$id" SKIPPED_DISABLED "$policy" "$rev" 0 "$(core_state_boot_id)"; return 0; }
     [ "$type" = task ] || return 0
     [ "$boot_phase" = "$phase" ] || return 0
@@ -49,7 +64,7 @@ runner_module() {
         core_log "$id: revisione aggiornata, riesecuzione automatica sospesa; usare reapply/reset"
         return 0
     fi
-    request_id=$(awk -F= '$1=="requested_at"{print $2; exit}' "$request_file" 2>/dev/null || true)
+    request_id=$(core_state_get_request_field "$CORE_STATE_ROOT" "$id" requested_at 2>/dev/null || true)
     if [ "$request" -eq 1 ] && [ -n "$request_id" ] &&
        [ "$(core_state_get "$CORE_STATE_ROOT" status "$id")" = SUCCESS ] &&
        [ "$(core_state_get "$CORE_STATE_ROOT" completed_revision "$id")" = "$rev" ] &&
@@ -78,7 +93,7 @@ runner_module() {
             if [ "$dep_policy" = once ]; then
                 [ "$(core_state_get "$CORE_STATE_ROOT" completed_at "$dep")" -gt 0 ] 2>/dev/null || { runner_record_failure "$id" BLOCKED_DEPENDENCY "$failure" "$rev" 66 "$boot"; return $?; }
                 [ "$(core_state_get "$CORE_STATE_ROOT" completed_revision "$dep")" = "$dep_rev" ] || { runner_record_failure "$id" BLOCKED_DEPENDENCY "$failure" "$rev" 66 "$boot"; return $?; }
-                [ ! -f "$CORE_STATE_ROOT/var/lib/ps5-cachyos-tools/state/reapply/$dep.request" ] || { runner_record_failure "$id" BLOCKED_DEPENDENCY "$failure" "$rev" 66 "$boot"; return $?; }
+                if runner_request_exists "$CORE_STATE_ROOT" "$dep"; then runner_record_failure "$id" BLOCKED_DEPENDENCY "$failure" "$rev" 66 "$boot"; return $?; fi
             else
                 [ "$dep_state" = SUCCESS ] || { runner_record_failure "$id" BLOCKED_DEPENDENCY "$failure" "$rev" 66 "$boot"; return $?; }
                 [ "$(core_state_get "$CORE_STATE_ROOT" last_boot_id "$dep")" = "$boot" ] || { runner_record_failure "$id" BLOCKED_DEPENDENCY "$failure" "$rev" 66 "$boot"; return $?; }
@@ -91,7 +106,7 @@ runner_module() {
     done
     hook="$CORE_MODULE_ROOT/$id/boot.sh"; [ -x "$hook" ] || { runner_record_failure "$id" FAILED "$failure" "$rev" 127 "$boot"; return $?; }
     core_state_write "$CORE_STATE_ROOT" "$id" RUNNING "$policy" "$rev" 0 "$boot" || return 1
-    CORE_INSTALL_MODE=live CORE_TARGET_ROOT="$CORE_STATE_ROOT" CORE_MODULE_ID="$id" CORE_BOOT_PHASE="$phase" "$hook" "$CORE_STATE_ROOT" "$phase"; rc=$?
+    runner_execute_hook "$CORE_STATE_ROOT" "$id" "$phase" "$hook"; rc=$?
     if [ "$rc" -eq 0 ]; then
         if [ "$request" -eq 1 ]; then
             core_state_write "$CORE_STATE_ROOT" "$id" APPLIED "$policy" "$rev" 0 "$boot" || return 1

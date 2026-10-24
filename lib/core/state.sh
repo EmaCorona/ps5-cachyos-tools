@@ -36,7 +36,7 @@ core_state_write() {
     file="$state_fd_path/$id.state"
     [ ! -L "$file" ] && { [ ! -e "$file" ] || [ -f "$file" ]; } || { exec {state_fd}<&-; return 1; }
     core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/modules || { exec {state_fd}<&-; return 1; }; now=$(date +%s); tmp=$(mktemp "$state_fd_path/.${id}.state.XXXXXX") || { exec {state_fd}<&-; return 1; }; core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/modules || { rm -f -- "$tmp"; exec {state_fd}<&-; return 1; }
-    chmod 600 "$tmp"; printf 'id=%s\npolicy_at_run=%s\nrevision=%s\ncompleted_at=%s\nlast_attempt_at=%s\nlast_exit_code=%s\nlast_boot_id=%s\nattempt_boot_id=%s\nautomatic_attempted_boot_id=%s\nreapply_requested=%s\nstatus=%s\ninstall_identity=%s\n' "$id" "$policy" "$revision" "$([ "$status" = SUCCESS ] && echo "$now" || echo 0)" "$now" "$code" "$boot_id" "$boot_id" "$boot_id" "$([ -f "$root/var/lib/ps5-cachyos-tools/state/reapply/$id.request" ] && echo true || echo false)" "$status" "$(cat "$root/var/lib/ps5-cachyos-tools/install.identity" 2>/dev/null || echo unknown)" > "$tmp" || { rm -f "$tmp"; return 1; }
+    chmod 600 "$tmp"; printf 'id=%s\npolicy_at_run=%s\nrevision=%s\ncompleted_at=%s\nlast_attempt_at=%s\nlast_exit_code=%s\nlast_boot_id=%s\nattempt_boot_id=%s\nautomatic_attempted_boot_id=%s\nreapply_requested=%s\nstatus=%s\ninstall_identity=%s\n' "$id" "$policy" "$revision" "$([ "$status" = SUCCESS ] && echo "$now" || echo 0)" "$now" "$code" "$boot_id" "$boot_id" "$boot_id" "$(core_state_get_request_field "$root" "$id" requested_at >/dev/null 2>&1 && echo true || echo false)" "$status" "$(cat "$root/var/lib/ps5-cachyos-tools/install.identity" 2>/dev/null || echo unknown)" > "$tmp" || { rm -f "$tmp"; return 1; }
     local completed_at=0 completed_revision=$revision old
     old="$state_fd_path/$id.state"
     if [ -f "$old" ] && [ ! -L "$old" ]; then
@@ -44,23 +44,28 @@ core_state_write() {
         completed_revision=$(awk -F= '$1=="completed_revision"{print $2; exit}' "$old" 2>/dev/null || echo "$revision")
         applied_request_id=$(awk -F= '$1=="reapply_applied_id"{print $2; exit}' "$old" 2>/dev/null || true)
     fi
-    if [ -f "$root/var/lib/ps5-cachyos-tools/state/reapply/$id.request" ] && [ ! -L "$root/var/lib/ps5-cachyos-tools/state/reapply/$id.request" ]; then
-        request_id=$(awk -F= '$1=="requested_at"{print $2; exit}' "$root/var/lib/ps5-cachyos-tools/state/reapply/$id.request" 2>/dev/null || true)
-    fi
+    request_id=$(core_state_get_request_field "$root" "$id" requested_at 2>/dev/null || true)
     { [ "$status" = APPLIED ] || [ "$status" = SUCCESS ]; } && [ -n "$request_id" ] && applied_request_id=$request_id
     case "$status" in RUNNING) request_phase=RUNNING;; APPLIED) request_phase=APPLIED;; SUCCESS) [ -n "$request_id" ] && request_phase=COMPLETED || request_phase=NONE;; *) [ -n "$request_id" ] && request_phase=REQUESTED || request_phase=NONE;; esac
     [ "$status" = SUCCESS ] && { completed_at=$now; completed_revision=$revision; }
-    printf 'id=%s\npolicy_at_run=%s\nrevision=%s\ncompleted_at=%s\ncompleted_revision=%s\nreapply_applied_id=%s\nrequest_phase=%s\nlast_attempt_at=%s\nlast_exit_code=%s\nlast_boot_id=%s\nattempt_boot_id=%s\nautomatic_attempted_boot_id=%s\nreapply_requested=%s\nstatus=%s\ninstall_identity=%s\n' "$id" "$policy" "$revision" "$completed_at" "$completed_revision" "$applied_request_id" "$request_phase" "$now" "$code" "$boot_id" "$boot_id" "$boot_id" "$([ -f "$root/var/lib/ps5-cachyos-tools/state/reapply/$id.request" ] && echo true || echo false)" "$status" "$(cat "$root/var/lib/ps5-cachyos-tools/install.identity" 2>/dev/null || echo unknown)" > "$tmp" || { rm -f "$tmp"; return 1; }
+    printf 'id=%s\npolicy_at_run=%s\nrevision=%s\ncompleted_at=%s\ncompleted_revision=%s\nreapply_applied_id=%s\nrequest_phase=%s\nlast_attempt_at=%s\nlast_exit_code=%s\nlast_boot_id=%s\nattempt_boot_id=%s\nautomatic_attempted_boot_id=%s\nreapply_requested=%s\nstatus=%s\ninstall_identity=%s\n' "$id" "$policy" "$revision" "$completed_at" "$completed_revision" "$applied_request_id" "$request_phase" "$now" "$code" "$boot_id" "$boot_id" "$boot_id" "$(core_state_get_request_field "$root" "$id" requested_at >/dev/null 2>&1 && echo true || echo false)" "$status" "$(cat "$root/var/lib/ps5-cachyos-tools/install.identity" 2>/dev/null || echo unknown)" > "$tmp" || { rm -f "$tmp"; return 1; }
     core_state_validate_path "$root" "/var/lib/ps5-cachyos-tools/state/modules/$id.state" || { rm -f -- "$tmp"; exec {state_fd}<&-; return 1; }; mv -f -- "$tmp" "$file" || { rm -f -- "$tmp"; exec {state_fd}<&-; return 1; }; core_state_validate_path "$root" "/var/lib/ps5-cachyos-tools/state/modules/$id.state" || { exec {state_fd}<&-; return 1; }; exec {state_fd}<&-
 }
 core_state_get() {
-    local root=$1 key=$2 id=$3 file
+    local root=$1 key=$2 id=$3 file state_fd expected actual
     core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/modules || return 1
     core_state_validate_path "$root" "/var/lib/ps5-cachyos-tools/state/modules/$id.state" || return 1
-    file=$(core_state_file "$root" "$id")
-    [ ! -L "$file" ] && { [ ! -e "$file" ] || [ -f "$file" ]; } || return 1
-    [ ! -e "$file" ] && return 0
-    [ "$(stat -c '%a' "$file" 2>/dev/null)" = 600 ] || return 1
-    awk -F= -v key="$2" '$1==key{print substr($0,index($0,"=")+1); exit}' "$file" 2>/dev/null
+    file=$(core_state_file "$root" "$id"); exec {state_fd}<"$(core_state_dir "$root")" || return 1; expected=$(realpath -e -- "$(core_state_dir "$root")") || { exec {state_fd}<&-; return 1; }; actual=$(readlink -e -- "/proc/self/fd/$state_fd") || { exec {state_fd}<&-; return 1; }; [ "$actual" = "$expected" ] || { exec {state_fd}<&-; return 1; }
+    file="/proc/self/fd/$state_fd/$id.state"
+    [ ! -L "$file" ] && { [ ! -e "$file" ] || [ -f "$file" ]; } || { exec {state_fd}<&-; return 1; }
+    [ ! -e "$file" ] && { exec {state_fd}<&-; return 0; }
+    [ "$(stat -c '%a' "$file" 2>/dev/null)" = 600 ] || { exec {state_fd}<&-; return 1; }
+    awk -F= -v key="$2" '$1==key{print substr($0,index($0,"=")+1); exit}' "$file" 2>/dev/null; local rc=$?; exec {state_fd}<&-; return "$rc"
+}
+core_state_get_request_field() {
+    local root=$1 id=$2 key=$3 dir fd expected actual file; dir="$root/var/lib/ps5-cachyos-tools/state/reapply"
+    [ -d "$dir" ] && [ ! -L "$dir" ] || return 1; core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/reapply || return 1
+    exec {fd}<"$dir" || return 1; expected=$(realpath -e -- "$dir") || { exec {fd}<&-; return 1; }; actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }; [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
+    file="/proc/self/fd/$fd/$id.request"; [ -f "$file" ] || { exec {fd}<&-; return 1; }; awk -F= -v key="$key" '$1==key{print substr($0,index($0,"=")+1); exit}' "$file" 2>/dev/null; local rc=$?; exec {fd}<&-; return "$rc"
 }
 core_state_boot_id() { [ -n "${CORE_BOOT_ID-}" ] && printf '%s\n' "$CORE_BOOT_ID" || cat /proc/sys/kernel/random/boot_id 2>/dev/null || printf 'unknown\n'; }
