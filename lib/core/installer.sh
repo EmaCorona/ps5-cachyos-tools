@@ -77,6 +77,7 @@ core_install_body() {
                 [ "$rc" -eq 0 ] || { core_log "install hook fallito: $id (rc=$rc)"; return "$rc"; }
             fi
         fi
+        [ "$type" != service ] || core_service_module_install "$root" "$repo" "$id" || return 1
     done <<< "$order"
     core_service_install "$root" "$repo" || return 1
     if [ "${CORE_INSTALL_MODE:-offline}" = live ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then

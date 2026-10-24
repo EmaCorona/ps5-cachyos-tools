@@ -14,6 +14,7 @@ core_target_realpath() {
 
 core_target_validate_offline() {
     local root=$1 boot=${2-} part
+    [[ "$root" != *'..'* ]] || { core_die 'rootfs non può contenere componenti ..'; return 1; }
     [ ! -L "$root" ] || { core_die 'rootfs target non può essere un symlink'; return 1; }
     root=$(core_target_realpath "$root") || return 1
     [ -r "$root/etc/os-release" ] || { core_die "rootfs senza etc/os-release: $root"; return 1; }
