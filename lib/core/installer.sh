@@ -47,6 +47,7 @@ core_install_body() {
     fi
     target=$(core_target_path "$root" /usr/local/bin/ps5-cachyos-tools) || return 1
     core_install_copy "$repo/bin/ps5-cachyos-tools" "$target" 755 || return 1
+    core_install_copy "$repo/bin/ps5-cachyos-tools" "$root/usr/lib/ps5-cachyos-tools/bin/ps5-cachyos-tools" 755 || return 1
     for path in "$repo"/systemd/ps5-tools-*.service; do
         [ -f "$path" ] || continue
         core_install_copy "$path" "$root/usr/lib/ps5-cachyos-tools/systemd/$(basename "$path")" 644 || return 1

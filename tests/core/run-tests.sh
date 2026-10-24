@@ -13,6 +13,8 @@ mkdir -p "$tmp/root/etc"
 printf 'ID=linux\nNAME=fixture\n' > "$tmp/root/etc/os-release"
 ./bin/ps5-cachyos-tools install --root "$tmp/root" --dry-run >/tmp/ps5-tools-dry.out 2>&1 && ! test -e "$tmp/root/usr/lib/ps5-cachyos-tools" && ok 'dry-run non scrive la rootfs' || no 'dry-run ha scritto la rootfs'
 ./bin/ps5-cachyos-tools install --root "$tmp/root" --module fan >/tmp/ps5-tools-install.out 2>&1 && test -x "$tmp/root/usr/lib/ps5-cachyos-tools/boot-runner" && test -L "$tmp/root/etc/systemd/system/multi-user.target.wants/ps5-tools-boot.service" && ok 'installazione offline resta nella root target' || no 'installazione offline incompleta'
+mkdir -p "$tmp/second/etc"; printf 'ID=linux\nNAME=fixture\n' > "$tmp/second/etc/os-release"
+"$tmp/root/usr/local/bin/ps5-cachyos-tools" install --root "$tmp/second" --module fan >/tmp/ps5-tools-installed-cli.out 2>&1 && test -x "$tmp/second/usr/local/bin/ps5-cachyos-tools" && ok 'CLI installata riutilizzabile come sorgente' || no 'CLI installata non riutilizzabile come sorgente'
 ./bin/ps5-cachyos-tools install --root "$tmp/root" --module fan >/tmp/ps5-tools-reinstall.out 2>&1 && ok 'reinstallazione idempotente con symlink gestiti' || no 'reinstallazione idempotente fallita'
 mkdir -p "$tmp/boot"
 ./bin/ps5-cachyos-tools install --root "$tmp/root" --boot "$tmp/boot" --module fan --dry-run >/tmp/ps5-tools-boot-separate.out 2>&1 && ok 'rootfs e boot su mount separati' || no 'mount boot separato rifiutato'
