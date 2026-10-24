@@ -206,5 +206,25 @@ else
     no 'fixture reset non installabile'
 fi
 
+state_escape_root="$tmp/state-escape-root"; state_outside="$tmp/state-outside"
+mkdir -p "$state_escape_root" "$state_outside"; ln -s "$state_outside" "$state_escape_root/var"
+if core_state_write "$state_escape_root" fan SUCCESS always 1 0 state-escape >/dev/null 2>&1; then
+    no 'state writer accetta var symlinkata'
+elif [ -z "$(find "$state_outside" -mindepth 1 -print -quit)" ]; then
+    ok 'state writer rifiuta var symlinkata senza scrivere fuori root'
+else
+    no 'state writer ha scritto fuori root tramite var symlinkata'
+fi
+
+runner_escape_root="$tmp/runner-escape-root"; runner_outside="$tmp/runner-outside"
+mkdir -p "$runner_escape_root" "$runner_outside"; ln -s "$runner_outside" "$runner_escape_root/run"
+if CORE_RUN_ROOT="$runner_escape_root" CORE_STATE_ROOT="$runner_escape_root" CORE_PREFIX="$ROOT" bash -c 'source "$0/lib/core/boot-runner.sh"; runner_lock' "$ROOT" >/dev/null 2>&1; then
+    no 'boot runner lock accetta run symlinkato'
+elif [ -z "$(find "$runner_outside" -mindepth 1 -print -quit)" ]; then
+    ok 'boot runner lock rifiuta run symlinkato senza scrivere fuori root'
+else
+    no 'boot runner lock ha scritto fuori root tramite run symlinkato'
+fi
+
 printf '%s\n' "$pass test R4 superati, $fail falliti"
 [ "$fail" -eq 0 ]

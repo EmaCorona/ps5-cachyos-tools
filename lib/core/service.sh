@@ -240,6 +240,9 @@ core_service_module_install() {
 core_service_module_remove() {
     local root=$1 id=$2 unit
     unit=$(core_registry_field "$id" 7); [ -n "$unit" ] || return 0
+    declare -F core_target_validate_final >/dev/null || return 1
+    core_target_validate_final "$root" "/etc/systemd/system/multi-user.target.wants/$unit" "$root/etc/systemd/system/multi-user.target.wants/$unit" || return 1
+    core_target_validate_final "$root" "/etc/systemd/system/$unit" "$root/etc/systemd/system/$unit" || return 1
     if [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then
         systemctl disable --now "$unit" || return 1
         systemctl daemon-reload || return 1

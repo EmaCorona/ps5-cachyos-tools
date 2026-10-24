@@ -13,7 +13,7 @@ source "$CORE_PREFIX/core/dependencies.sh"
 source "$CORE_PREFIX/core/state.sh"
 
 runner_load_registry() { core_registry_discover "$CORE_MODULE_ROOT" >/dev/null && core_registry_validate_dependencies; }
-runner_lock() { mkdir -p "$CORE_RUN_ROOT/run/ps5-cachyos-tools"; exec 7>"$CORE_RUN_ROOT/run/ps5-cachyos-tools/transaction.lock"; flock -n 7 || { core_log 'transazione amministrativa già attiva'; return 1; }; exec 9>"$CORE_RUN_ROOT/run/ps5-cachyos-tools/runner.lock"; flock -n 9 || { core_log 'runner già attivo'; return 1; }; }
+runner_lock() { core_state_validate_path "$CORE_RUN_ROOT" /run/ps5-cachyos-tools || return 1; mkdir -p "$CORE_RUN_ROOT/run/ps5-cachyos-tools"; exec 7>"$CORE_RUN_ROOT/run/ps5-cachyos-tools/transaction.lock"; flock -n 7 || { core_log 'transazione amministrativa già attiva'; return 1; }; exec 9>"$CORE_RUN_ROOT/run/ps5-cachyos-tools/runner.lock"; flock -n 9 || { core_log 'runner già attivo'; return 1; }; }
 runner_wait_service() {
     local unit=$1 attempt deadline=${CORE_RUNNER_DEADLINE:-0} now
     [ "$CORE_STATE_ROOT" = / ] || return 1
