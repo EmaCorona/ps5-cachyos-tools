@@ -14,6 +14,15 @@ source "$CORE_PREFIX/core/state.sh"
 
 runner_load_registry() { core_registry_discover "$CORE_MODULE_ROOT" >/dev/null && core_registry_validate_dependencies; }
 runner_lock() { mkdir -p "$CORE_RUN_ROOT/run/ps5-cachyos-tools"; exec 7>"$CORE_RUN_ROOT/run/ps5-cachyos-tools/transaction.lock"; flock -n 7 || { core_log 'transazione amministrativa già attiva'; return 1; }; exec 9>"$CORE_RUN_ROOT/run/ps5-cachyos-tools/runner.lock"; flock -n 9 || { core_log 'runner già attivo'; return 1; }; }
+runner_wait_service() {
+    local unit=$1 attempt
+    [ "$CORE_STATE_ROOT" = / ] || return 1
+    for attempt in $(seq 1 30); do
+        systemctl is-active --quiet "$unit" 2>/dev/null && return 0
+        sleep 1
+    done
+    return 1
+}
 runner_module() {
     local id=$1 phase=$2 data enabled type policy boot_phase rev deps unit failure state boot hook rc request=0 request_file dep_policy dep_rev request_id
     enabled=$(core_registry_field "$id" 1); type=$(core_registry_field "$id" 2); policy=$(core_registry_field "$id" 3); boot_phase=$(core_registry_field "$id" 4); rev=$(core_registry_field "$id" 5); deps=$(core_registry_field "$id" 6); unit=$(core_registry_field "$id" 7); failure=$(core_registry_field "$id" 8)
@@ -40,6 +49,13 @@ runner_module() {
         core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot" || return 1
         return 0
     fi
+    if [ "$request" -eq 1 ] && [ "$(core_state_get "$CORE_STATE_ROOT" status "$id")" = APPLIED ] &&
+       [ "$(core_state_get "$CORE_STATE_ROOT" revision "$id")" = "$rev" ]; then
+        core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot" || return 1
+        rm -f -- "$request_file" || return 1
+        core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot" || return 1
+        return 0
+    fi
     [ "$request" -eq 1 ] || [ -n "$CORE_REAPPLY_ID" ] || [ "$(core_state_get "$CORE_STATE_ROOT" automatic_attempted_boot_id "$id")" != "$boot" ] || return 0
     for dep in $deps; do
         [ "$(core_registry_field "$dep" 1)" = true ] || { core_state_write "$CORE_STATE_ROOT" "$id" BLOCKED_DEPENDENCY "$policy" "$rev" 66 "$boot"; return 0; }
@@ -56,13 +72,18 @@ runner_module() {
                 [ "$(core_state_get "$CORE_STATE_ROOT" last_boot_id "$dep")" = "$boot" ] || { core_state_write "$CORE_STATE_ROOT" "$id" BLOCKED_DEPENDENCY "$policy" "$rev" 66 "$boot"; return 0; }
             fi
         elif [ "$dep_type" = service ]; then
-            [ "$CORE_STATE_ROOT" != / ] || systemctl is-active --quiet "$(core_registry_field "$dep" 7)" 2>/dev/null || { core_state_write "$CORE_STATE_ROOT" "$id" BLOCKED_DEPENDENCY "$policy" "$rev" 66 "$boot"; return 0; }
+            if [ "$CORE_STATE_ROOT" = / ]; then
+                runner_wait_service "$(core_registry_field "$dep" 7)" || { core_state_write "$CORE_STATE_ROOT" "$id" BLOCKED_DEPENDENCY "$policy" "$rev" 66 "$boot" || return 1; return 0; }
+            fi
         fi
     done
     hook="$CORE_MODULE_ROOT/$id/boot.sh"; [ -x "$hook" ] || { core_state_write "$CORE_STATE_ROOT" "$id" FAILED "$policy" "$rev" 127 "$boot"; return 1; }
     core_state_write "$CORE_STATE_ROOT" "$id" RUNNING "$policy" "$rev" 0 "$boot" || return 1
     CORE_INSTALL_MODE=live CORE_TARGET_ROOT="$CORE_STATE_ROOT" CORE_MODULE_ID="$id" CORE_BOOT_PHASE="$phase" "$hook" "$CORE_STATE_ROOT" "$phase"; rc=$?
     if [ "$rc" -eq 0 ]; then
+        if [ "$request" -eq 1 ]; then
+            core_state_write "$CORE_STATE_ROOT" "$id" APPLIED "$policy" "$rev" 0 "$boot" || return 1
+        fi
         core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot" || return 1
         if [ "$request" -eq 1 ]; then
             if rm -f -- "$request_file"; then

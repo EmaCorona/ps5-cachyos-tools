@@ -118,8 +118,8 @@ core_service_reapply() {
 
 core_service_source() {
     local repo=$1 unit=$2
-    if [ -f "$repo/systemd/$unit" ]; then printf '%s\n' "$repo/systemd/$unit"; return 0; fi
-    if [ -f "$repo/usr/lib/ps5-cachyos-tools/systemd/$unit" ]; then printf '%s\n' "$repo/usr/lib/ps5-cachyos-tools/systemd/$unit"; return 0; fi
+    if [ -f "$repo/systemd/$unit" ] && [ ! -L "$repo/systemd/$unit" ]; then printf '%s\n' "$repo/systemd/$unit"; return 0; fi
+    if [ -f "$repo/usr/lib/ps5-cachyos-tools/systemd/$unit" ] && [ ! -L "$repo/usr/lib/ps5-cachyos-tools/systemd/$unit" ]; then printf '%s\n' "$repo/usr/lib/ps5-cachyos-tools/systemd/$unit"; return 0; fi
     return 1
 }
 

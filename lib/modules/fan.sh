@@ -232,7 +232,16 @@ module_fan_remove() {
 }
 
 module_fan_run() {
-    local root=${1:-}; [ -n "$root" ] && [ -d "$root" ] || { echo "fan: root filesystem non trovato" >&2; return 1; }
+    local root=${1:-} part current
+    [ -n "$root" ] && [ -d "$root" ] || { echo "fan: root filesystem non trovato" >&2; return 1; }
+    [[ "$root" = /* && "$root" != *'..'* ]] || { echo 'fan: root filesystem non assoluto o non sicuro' >&2; return 1; }
+    [ ! -L "$root" ] || { echo 'fan: root filesystem symlink non autorizzato' >&2; return 1; }
+    current=/; IFS=/ read -ra root_parts <<< "${root#/}"
+    for part in "${root_parts[@]}"; do
+        [ -n "$part" ] || continue
+        current="${current%/}/$part"
+        [ ! -L "$current" ] || { echo "fan: antenato root symlink non autorizzato: $current" >&2; return 1; }
+    done
     module_fan_validate_write_set "$root" || return 1
     local repo_dir
     if [ -n "${CORE_REPO:-}" ] && [ -d "$CORE_REPO/config" ]; then
