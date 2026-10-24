@@ -17,6 +17,17 @@ core_cli_validate_registry_root() {
     local root=$1 registry=/usr/lib/ps5-cachyos-tools/modules
     core_target_validate_final "$root" "$registry" "$root$registry"
 }
+core_cli_run_check_hook() {
+    local root=$1 id=$2 hook="$root/usr/lib/ps5-cachyos-tools/modules/$2/check.sh" expected actual hook_fd rc
+    [ -x "$hook" ] || return 0
+    expected=$(realpath -e -- "$hook") || return 1
+    core_target_validate_final "$root" "/usr/lib/ps5-cachyos-tools/modules/$id/check.sh" "$hook" || return 1
+    exec {hook_fd}<"$hook" || return 1
+    actual=$(readlink -e -- "/proc/self/fd/$hook_fd") || { exec {hook_fd}<&-; return 1; }
+    [ "$actual" = "$expected" ] || { exec {hook_fd}<&-; return 1; }
+    core_target_validate_final "$root" "/usr/lib/ps5-cachyos-tools/modules/$id/check.sh" "$hook" || { exec {hook_fd}<&-; return 1; }
+    bash "/proc/self/fd/$hook_fd" "$root"; rc=$?; exec {hook_fd}<&-; return "$rc"
+}
 core_cli_status() {
     local root=$1 id f installed enabled type policy active readiness runtime_state state profile present pid cycles updated_at instance_id now
     [ -d "$root/var/lib/ps5-cachyos-tools/state/modules" ] || return 1
@@ -94,6 +105,23 @@ main() {
         root=${root:-/}
         core_cli_status "$root"
         return $?
+    fi
+    if [ "$cmd" = check ]; then
+        if [ "$live" -eq 1 ]; then [ -z "$root" ] || { core_die '--live e --root sono incompatibili'; return 2; }; root=$(core_target_validate_live) || return 1; else [ -n "$root" ] || { core_die '--root richiesto'; return 2; }; root=$(core_target_validate_offline "$root") || return 1; fi
+        core_cli_validate_registry_root "$root" || return 1; core_registry_discover "$root/usr/lib/ps5-cachyos-tools/modules" >/dev/null || return 1
+        for id in "${CORE_MODULE_IDS[@]}"; do core_cli_run_check_hook "$root" "$id" || return 1; done
+        return 0
+    fi
+    if [ "$cmd" = reapply ] && [ "$live" -eq 0 ]; then
+        [ -n "$module" ] || { core_die 'ID modulo richiesto'; return 2; }; [ -n "$root" ] || { core_die '--root richiesto'; return 2; }
+        root=$(core_target_validate_offline "$root") || return 1; core_cli_validate_registry_root "$root" || return 1
+        core_registry_discover "$root/usr/lib/ps5-cachyos-tools/modules" >/dev/null || return 1
+        [ "${CORE_MODULE[$module]+x}" = x ] || { core_die "modulo inesistente: $module"; return 1; }
+        [ "$(core_registry_field "$module" 2)" != service ] || { core_die 'reapply offline non supportato per i servizi'; return 1; }
+        phase=$(core_registry_field "$module" 4); [ "$phase" = service ] && phase=normal
+        core_txn_lock "$root" || return 1
+        core_target_write_reapply_request "$root" "$module" "$phase" "$(core_registry_field "$module" 5)" || return 1
+        core_log "reapply pianificato per il prossimo boot: $module"; return 0
     fi
     case "$cmd" in
         list) core_registry_discover "$BASE/modules"; core_registry_validate_dependencies;;

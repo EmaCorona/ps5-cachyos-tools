@@ -29,13 +29,16 @@ core_state_validate_path() {
     [ ! -L "$full" ]
 }
 core_state_write() {
-    local root=$1 id=$2 status=$3 policy=$4 revision=$5 code=$6 boot_id=${7-unknown} dir file tmp now request_id='' applied_request_id='' request_phase=NONE
+    local root=$1 id=$2 status=$3 policy=$4 revision=$5 code=$6 boot_id=${7-unknown} dir file tmp now request_id='' applied_request_id='' request_phase=NONE state_fd state_fd_path expected_dir actual_dir
     dir=$(core_state_dir "$root"); file=$(core_state_file "$root" "$id"); core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/modules || return 1; core_state_validate_path "$root" "/var/lib/ps5-cachyos-tools/state/modules/$id.state" || return 1; core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/reapply || return 1; core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/install.identity || return 1; core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/modules || return 1; mkdir -p "$dir" || return 1; core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/modules || return 1; chmod 700 "$dir" || return 1
-    [ ! -L "$file" ] && { [ ! -e "$file" ] || [ -f "$file" ]; } || return 1
-    core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/modules || return 1; now=$(date +%s); tmp=$(mktemp "$dir/.${id}.state.XXXXXX") || return 1; core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/modules || { rm -f -- "$tmp"; return 1; }
+    exec {state_fd}<"$dir" || return 1
+    state_fd_path=/proc/self/fd/$state_fd; expected_dir=$(realpath -e -- "$dir") || { exec {state_fd}<&-; return 1; }; actual_dir=$(readlink -e -- "$state_fd_path") || { exec {state_fd}<&-; return 1; }; [ "$actual_dir" = "$expected_dir" ] || { exec {state_fd}<&-; return 1; }
+    file="$state_fd_path/$id.state"
+    [ ! -L "$file" ] && { [ ! -e "$file" ] || [ -f "$file" ]; } || { exec {state_fd}<&-; return 1; }
+    core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/modules || { exec {state_fd}<&-; return 1; }; now=$(date +%s); tmp=$(mktemp "$state_fd_path/.${id}.state.XXXXXX") || { exec {state_fd}<&-; return 1; }; core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/modules || { rm -f -- "$tmp"; exec {state_fd}<&-; return 1; }
     chmod 600 "$tmp"; printf 'id=%s\npolicy_at_run=%s\nrevision=%s\ncompleted_at=%s\nlast_attempt_at=%s\nlast_exit_code=%s\nlast_boot_id=%s\nattempt_boot_id=%s\nautomatic_attempted_boot_id=%s\nreapply_requested=%s\nstatus=%s\ninstall_identity=%s\n' "$id" "$policy" "$revision" "$([ "$status" = SUCCESS ] && echo "$now" || echo 0)" "$now" "$code" "$boot_id" "$boot_id" "$boot_id" "$([ -f "$root/var/lib/ps5-cachyos-tools/state/reapply/$id.request" ] && echo true || echo false)" "$status" "$(cat "$root/var/lib/ps5-cachyos-tools/install.identity" 2>/dev/null || echo unknown)" > "$tmp" || { rm -f "$tmp"; return 1; }
     local completed_at=0 completed_revision=$revision old
-    old=$(core_state_file "$root" "$id")
+    old="$state_fd_path/$id.state"
     if [ -f "$old" ] && [ ! -L "$old" ]; then
         completed_at=$(awk -F= '$1=="completed_at"{print $2; exit}' "$old" 2>/dev/null || echo 0)
         completed_revision=$(awk -F= '$1=="completed_revision"{print $2; exit}' "$old" 2>/dev/null || echo "$revision")
@@ -48,7 +51,7 @@ core_state_write() {
     case "$status" in RUNNING) request_phase=RUNNING;; APPLIED) request_phase=APPLIED;; SUCCESS) [ -n "$request_id" ] && request_phase=COMPLETED || request_phase=NONE;; *) [ -n "$request_id" ] && request_phase=REQUESTED || request_phase=NONE;; esac
     [ "$status" = SUCCESS ] && { completed_at=$now; completed_revision=$revision; }
     printf 'id=%s\npolicy_at_run=%s\nrevision=%s\ncompleted_at=%s\ncompleted_revision=%s\nreapply_applied_id=%s\nrequest_phase=%s\nlast_attempt_at=%s\nlast_exit_code=%s\nlast_boot_id=%s\nattempt_boot_id=%s\nautomatic_attempted_boot_id=%s\nreapply_requested=%s\nstatus=%s\ninstall_identity=%s\n' "$id" "$policy" "$revision" "$completed_at" "$completed_revision" "$applied_request_id" "$request_phase" "$now" "$code" "$boot_id" "$boot_id" "$boot_id" "$([ -f "$root/var/lib/ps5-cachyos-tools/state/reapply/$id.request" ] && echo true || echo false)" "$status" "$(cat "$root/var/lib/ps5-cachyos-tools/install.identity" 2>/dev/null || echo unknown)" > "$tmp" || { rm -f "$tmp"; return 1; }
-    core_state_validate_path "$root" "/var/lib/ps5-cachyos-tools/state/modules/$id.state" || { rm -f -- "$tmp"; return 1; }; mv -f -- "$tmp" "$file"; core_state_validate_path "$root" "/var/lib/ps5-cachyos-tools/state/modules/$id.state" || return 1
+    core_state_validate_path "$root" "/var/lib/ps5-cachyos-tools/state/modules/$id.state" || { rm -f -- "$tmp"; exec {state_fd}<&-; return 1; }; mv -f -- "$tmp" "$file" || { rm -f -- "$tmp"; exec {state_fd}<&-; return 1; }; core_state_validate_path "$root" "/var/lib/ps5-cachyos-tools/state/modules/$id.state" || { exec {state_fd}<&-; return 1; }; exec {state_fd}<&-
 }
 core_state_get() {
     local root=$1 key=$2 id=$3 file

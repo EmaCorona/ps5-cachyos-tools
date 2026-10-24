@@ -5,7 +5,10 @@ core_txn_lock() {
     local root=$1 lock_dir="$1/run/ps5-cachyos-tools"
     core_target_validate_final "$root" /run/ps5-cachyos-tools "$root/run/ps5-cachyos-tools" || return 1
     mkdir -p "$lock_dir" || return 1
-    exec 8>"$lock_dir/transaction.lock"
+    core_target_validate_final "$root" /run/ps5-cachyos-tools "$lock_dir" || return 1
+    exec 10<"$lock_dir" || return 1
+    [ "$(readlink -e /proc/self/fd/10 2>/dev/null)" = "$(realpath -e -- "$lock_dir" 2>/dev/null)" ] || { exec 10<&-; return 1; }
+    exec 8>"/proc/self/fd/10/transaction.lock" || { exec 10<&-; return 1; }; exec 10<&-
     flock -n 8 || { core_log 'transazione già attiva'; return 1; }
 }
 

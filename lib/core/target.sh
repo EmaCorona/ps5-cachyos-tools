@@ -165,3 +165,18 @@ core_target_boot_path() {
     core_target_validate_mount "$resolved" boot || return 1
     printf '%s\n' "$resolved"
 }
+
+core_target_write_reapply_request() {
+    local root=$1 id=$2 phase=$3 revision=$4 dir="$root/var/lib/ps5-cachyos-tools/state/reapply" request_fd tmp expected actual
+    core_target_validate_final "$root" /var/lib/ps5-cachyos-tools/state/reapply "$dir" || return 1
+    mkdir -p -- "$dir" || return 1
+    core_target_validate_final "$root" /var/lib/ps5-cachyos-tools/state/reapply "$dir" || return 1
+    exec {request_fd}<"$dir" || return 1
+    expected=$(realpath -e -- "$dir") || { exec {request_fd}<&-; return 1; }
+    actual=$(readlink -e -- "/proc/self/fd/$request_fd") || { exec {request_fd}<&-; return 1; }
+    [ "$actual" = "$expected" ] || { exec {request_fd}<&-; return 1; }
+    tmp=$(mktemp "/proc/self/fd/$request_fd/.$id.request.XXXXXX") || { exec {request_fd}<&-; return 1; }
+    printf 'id=%s\nphase=%s\nrevision=%s\nrequested_at=%s\n' "$id" "$phase" "$revision" "$(date +%s%N)" > "$tmp" || { rm -f -- "$tmp"; exec {request_fd}<&-; return 1; }
+    mv -f -- "$tmp" "/proc/self/fd/$request_fd/$id.request" || { rm -f -- "$tmp"; exec {request_fd}<&-; return 1; }
+    exec {request_fd}<&-
+}
