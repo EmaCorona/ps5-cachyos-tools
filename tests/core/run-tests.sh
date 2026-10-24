@@ -180,6 +180,26 @@ EOF
 mkdir -p "$tmp/service-root/etc"; printf 'ID=linux\nNAME=fixture\n' > "$tmp/service-root/etc/os-release"
 if "$service_repo/bin/ps5-cachyos-tools" install --root "$tmp/service-root" --module fixture-service >/tmp/ps5-tools-service.out 2>&1 && test -f "$tmp/service-root/etc/systemd/system/fixture-service.service" && test ! -e "$tmp/service-root/usr/local/bin/ps5-fan"; then ok 'modulo service generico selettivo senza artefatti fan'; else no 'modulo service generico non isolato'; fi
 if "$tmp/service-root/usr/local/bin/ps5-cachyos-tools" status --root "$tmp/service-root" | grep -q 'fixture-service: installed=yes enabled=true type=service policy=always'; then ok 'status CLI espone il tipo service'; else no 'status CLI non espone il tipo service'; fi
+mockbin="$tmp/mockbin"; mkdir -p "$mockbin"; cat > "$mockbin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+state=${MOCK_SYSTEMCTL_STATE:?}
+case "$1" in
+    is-enabled) grep -q '^enabled=1$' "$state";;
+    is-active) grep -q '^active=1$' "$state";;
+    daemon-reload) [ "${MOCK_SYSTEMCTL_FAIL:-}" != daemon-reload ];;
+    enable) sed -i 's/^enabled=.*/enabled=1/' "$state";;
+    disable) sed -i 's/^enabled=.*/enabled=0/' "$state";;
+    start|restart) sed -i 's/^active=.*/active=1/' "$state";;
+    stop) sed -i 's/^active=.*/active=0/' "$state";;
+    *) exit 0;;
+esac
+EOF
+chmod 0755 "$mockbin/systemctl"; printf 'enabled=1\nactive=1\n' > "$tmp/mock-systemctl.state"
+if PATH="$mockbin:$PATH" MOCK_SYSTEMCTL_STATE="$tmp/mock-systemctl.state" CORE_STATE_ROOT="$tmp/service-root" CORE_RUN_ROOT="$tmp/service-root" bash -c 'source "$1/lib/core/log.sh"; source "$1/lib/core/registry.sh"; source "$1/lib/core/state.sh"; source "$1/lib/core/service.sh"; CORE_CONFIG_ROOT="$2" core_registry_discover "$2/modules" >/dev/null; core_service_reapply / fixture-service' _ "$ROOT" "$service_repo" >/tmp/ps5-tools-service-reapply.out 2>&1 && grep -q '^status=SUCCESS$' "$tmp/service-root/var/lib/ps5-cachyos-tools/state/modules/fixture-service.state"; then ok 'reapply live service usa lifecycle e stato'; else no 'reapply live service incompleto'; fi
+printf 'enabled=1\nactive=1\n' > "$tmp/mock-systemctl.state"
+if PATH="$mockbin:$PATH" MOCK_SYSTEMCTL_STATE="$tmp/mock-systemctl.state" CORE_STATE_ROOT="$tmp/service-root" CORE_RUN_ROOT="$tmp/service-root" bash -c 'source "$1/lib/core/log.sh"; source "$1/lib/core/registry.sh"; source "$1/lib/core/state.sh"; source "$1/lib/core/service.sh"; CORE_CONFIG_ROOT="$2" core_registry_discover "$2/modules" >/dev/null; eval "$(declare -f core_state_write | sed "s/core_state_write/core_state_write_real/g")"; core_state_write(){ [ "$3" = SUCCESS ] && return 77; core_state_write_real "$@"; }; core_service_reapply / fixture-service' _ "$ROOT" "$service_repo" >/tmp/ps5-tools-service-reapply-fail.out 2>&1 && false || grep -q '^enabled=1$' "$tmp/mock-systemctl.state" && grep -q '^active=1$' "$tmp/mock-systemctl.state"; then ok 'reapply service ripristina dopo failure commit stato'; else no 'reapply service non ripristina dopo failure commit stato'; fi
+printf 'enabled=1\nactive=1\n' > "$tmp/mock-systemctl.state"
+if PATH="$mockbin:$PATH" MOCK_SYSTEMCTL_STATE="$tmp/mock-systemctl.state" bash -c 'source "$1/lib/core/log.sh"; source "$1/lib/core/registry.sh"; source "$1/lib/core/state.sh"; source "$1/lib/core/service.sh"; CORE_CONFIG_ROOT="$2" core_registry_discover "$2/modules" >/dev/null; core_service_snapshot_state / fixture-service; MOCK_SYSTEMCTL_FAIL=daemon-reload; export MOCK_SYSTEMCTL_FAIL; core_service_stop / fixture-service || true; unset MOCK_SYSTEMCTL_FAIL; core_service_restore_state / fixture-service' _ "$ROOT" "$service_repo" >/dev/null 2>&1 && grep -q '^enabled=1$' "$tmp/mock-systemctl.state" && grep -q '^active=1$' "$tmp/mock-systemctl.state"; then ok 'rollback service ripristina stop parziale'; else no 'rollback service non ripristina stop parziale'; fi
 printf '#!/usr/bin/env bash\nprintf failure > "$1/etc/fixture-remove-failure"\nexit 23\n' > "$tmp/service-root/usr/lib/ps5-cachyos-tools/modules/fixture-service/remove.sh"; chmod 0755 "$tmp/service-root/usr/lib/ps5-cachyos-tools/modules/fixture-service/remove.sh"
 if "$tmp/service-root/usr/local/bin/ps5-cachyos-tools" remove fixture-service --root "$tmp/service-root" >/tmp/ps5-tools-service-remove-fail.out 2>&1 && false || test -f "$tmp/service-root/etc/systemd/system/fixture-service.service"; then ok 'rollback remove conserva il service dopo hook fallito'; else no 'rollback remove non ha conservato il service'; fi
 printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/service-root/usr/lib/ps5-cachyos-tools/modules/fixture-service/remove.sh"; chmod 0755 "$tmp/service-root/usr/lib/ps5-cachyos-tools/modules/fixture-service/remove.sh"
