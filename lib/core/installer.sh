@@ -182,7 +182,7 @@ core_install_body() {
         fi
         enabled=$(core_registry_field "$id" 1)
         install_disabled=$(core_registry_field "$id" 12)
-        rm -f -- "$root/run/ps5-cachyos-tools/runtime-changed/$id"
+        [ -n "$(core_registry_field "$id" 14)" ] || rm -f -- "$root/run/ps5-cachyos-tools/runtime-changed/$id"
         if [ "$enabled" = true ] || { [ -n "$module" ] && [ "$install_disabled" = true ]; }; then
             if [ -x "$moddir/install.sh" ]; then
                 CORE_REPO="$repo" CORE_INSTALL_MODE="${CORE_INSTALL_MODE:-offline}" CORE_TARGET_ROOT="$root" CORE_BOOT_TARGET="${CORE_BOOT_TARGET:-}" CORE_MODULE_ID="$id" CORE_RUNTIME_CHANGED_FILE="$root/run/ps5-cachyos-tools/runtime-changed/$id" CORE_FRAMEWORK_MANAGED=1 CORE_DRY_RUN=0 "$moddir/install.sh" "$root"; rc=$?

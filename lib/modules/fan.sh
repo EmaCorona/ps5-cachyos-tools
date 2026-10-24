@@ -229,6 +229,14 @@ module_fan_wait_ready() {
 module_fan_remove() {
     local root=${1:-/} keep=${2:-0} manifest backup='' service_was_active=0 service_was_enabled=0 path framework_managed=${CORE_FRAMEWORK_MANAGED:-0}
     [ -d "$root" ] || return 1
+    [[ "$root" = /* && "$root" != *'..'* ]] || { echo 'fan: root filesystem non assoluto o non sicuro' >&2; return 1; }
+    [ ! -L "$root" ] || { echo 'fan: root filesystem symlink non autorizzato' >&2; return 1; }
+    local current=/; IFS=/ read -ra root_parts <<< "${root#/}"
+    for part in "${root_parts[@]}"; do
+        [ -n "$part" ] || continue
+        current="${current%/}/$part"
+        [ ! -L "$current" ] || { echo "fan: antenato root symlink non autorizzato: $current" >&2; return 1; }
+    done
     manifest=$(module_fan_manifest_path "$root")
     module_fan_validate_manifest "$root" || return 1
     module_fan_check_removal_permissions "$root" || return 1
@@ -241,8 +249,8 @@ module_fan_remove() {
         done
     fi
     if [ "$framework_managed" != 1 ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then systemctl disable --now ps5-fan-daemon.service || { echo "fan: arresto/disabilitazione fallita; nessuna rimozione eseguita" >&2; module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; return 1; }; fi
-    while IFS= read -r path; do rm -f -- "$root$path" || { echo "fan: rimozione fallita: $path" >&2; module_fan_restore "$root" "$backup"; [ "$keep" = 1 ] || module_fan_restore_extra "$root" "$backup" || true; module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; echo "fan: rollback incompleto" >&2; return 1; }; done < <(module_fan_all_paths)
-    module_fan_remove_user_files "$root" "$keep" || { echo "fan: rimozione configurazione fallita" >&2; module_fan_restore "$root" "$backup"; [ "$keep" = 1 ] || module_fan_restore_extra "$root" "$backup" || true; module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; echo "fan: rollback incompleto" >&2; return 1; }
+    while IFS= read -r path; do rm -f -- "$root$path" || { echo "fan: rimozione fallita: $path" >&2; module_fan_restore "$root" "$backup"; [ "$keep" = 1 ] || module_fan_restore_extra "$root" "$backup" || true; [ "$framework_managed" = 1 ] || module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; echo "fan: rollback incompleto" >&2; return 1; }; done < <(module_fan_all_paths)
+    module_fan_remove_user_files "$root" "$keep" || { echo "fan: rimozione configurazione fallita" >&2; module_fan_restore "$root" "$backup"; [ "$keep" = 1 ] || module_fan_restore_extra "$root" "$backup" || true; [ "$framework_managed" = 1 ] || module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; echo "fan: rollback incompleto" >&2; return 1; }
     rmdir "$root/etc/ps5-fan/profiles" 2>/dev/null || true; rmdir "$root/etc/ps5-fan" 2>/dev/null || true
     if [ "$framework_managed" != 1 ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload || { echo "fan: daemon-reload fallito dopo rimozione" >&2; module_fan_restore "$root" "$backup" || true; [ "$keep" = 1 ] || module_fan_restore_extra "$root" "$backup" || true; systemctl daemon-reload 2>/dev/null || true; module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; return 1; }; if systemctl is-active --quiet ps5-fan-daemon.service || systemctl is-enabled --quiet ps5-fan-daemon.service; then echo "fan: servizio ancora active/enabled dopo rimozione" >&2; module_fan_restore "$root" "$backup" || true; [ "$keep" = 1 ] || module_fan_restore_extra "$root" "$backup" || true; systemctl daemon-reload 2>/dev/null || true; module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; return 1; fi; fi
     echo "fan: disinstallazione completata; file utente non rimossi"

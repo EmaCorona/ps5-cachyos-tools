@@ -29,6 +29,13 @@ if CORE_CONFIG_ROOT="$root" core_install_preflight "$root" "$repo" fan >/dev/nul
 chmod 0755 "$repo/modules/fan/readiness.sh"
 
 if CORE_CONFIG_ROOT="$root" core_install_preflight "$root" "$repo" fan >/dev/null 2>&1 && "$repo/bin/ps5-cachyos-tools" install --root "$root" --module fan >/dev/null 2>&1; then
+    printf changed > "$root/usr/local/bin/ps5-fan-daemon"
+    if CORE_INSTALL_MODE=offline core_install_body "$root" "$repo" fan >/dev/null 2>&1 && [ -s "$root/run/ps5-cachyos-tools/runtime-changed/fan" ]; then
+        ok 'runtime hook conserva il marker fino al service hook'
+    else
+        no 'runtime hook perde il marker prima del service hook'
+    fi
+    cp "$repo/bin/ps5-fan-daemon" "$root/usr/local/bin/ps5-fan-daemon"
     mkdir -p "$root/var/lib/ps5-cachyos-tools/state/reapply"
     printf 'id=fan\nphase=normal\nrevision=1\nrequested_at=99\n' > "$root/var/lib/ps5-cachyos-tools/state/reapply/fan.request"
     if "$root/usr/local/bin/ps5-cachyos-tools" remove fan --root "$root" --keep-config && [ ! -e "$root/var/lib/ps5-cachyos-tools/state/reapply/fan.request" ]; then
@@ -52,6 +59,23 @@ else
 fi
 else
     no 'fixture fan R4 non installabile'
+fi
+
+remove_target="$tmp/remove-target"; remove_link="$tmp/remove-link"
+mkdir -p "$remove_target/etc"; printf 'ID=linux\nNAME=r4\n' > "$remove_target/etc/os-release"
+if "$repo/bin/ps5-cachyos-tools" install --root "$remove_target" --module fan >/dev/null 2>&1; then
+    printf sentinel > "$tmp/remove-sentinel"
+    ln -s "$remove_target" "$remove_link"
+    source "$remove_target/usr/lib/ps5-cachyos-tools/fan.sh"
+    if module_fan_remove "$remove_link" 1 >/dev/null 2>&1; then
+        no 'remove standalone accetta una root symlinkata'
+    elif [ -f "$remove_target/etc/ps5-fan/.ps5-cachyos-tools.manifest" ] && [ "$(cat "$tmp/remove-sentinel")" = sentinel ]; then
+        ok 'remove standalone rifiuta root symlinkata senza alterare il target'
+    else
+        no 'remove standalone altera il target dopo root symlinkata'
+    fi
+else
+    no 'fixture remove standalone non installabile'
 fi
 
 rollback_root="$tmp/rollback-root"; mkdir -p "$rollback_root/etc"; printf 'ID=linux\nNAME=r4\n' > "$rollback_root/etc/os-release"
