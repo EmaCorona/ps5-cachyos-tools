@@ -1,0 +1,19 @@
+[Unit]
+Description=Autonomous PS5 fan target controller
+After=local-fs.target
+Wants=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ps5-fan-daemon
+Restart=always
+RestartSec=5
+RuntimeDirectory=ps5-fan
+RuntimeDirectoryMode=0750
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/etc/ps5-fan /run/ps5-fan
+
+[Install]
+WantedBy=multi-user.target

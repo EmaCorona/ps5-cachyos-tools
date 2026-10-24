@@ -1,0 +1,59 @@
+name: validate
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  software:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install static tools
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y shellcheck systemd
+      - name: Bash syntax
+        run: bash -n bin/ps5-fan bin/ps5-fan-daemon bin/ps5-temp lib/modules/fan.sh tests/run-tests.sh
+      - name: ShellCheck
+        run: shellcheck --severity=error bin/ps5-fan bin/ps5-fan-daemon bin/ps5-temp lib/modules/fan.sh tests/run-tests.sh
+      - name: Tests
+        run: bash tests/run-tests.sh
+      - name: systemd unit syntax
+        run: |
+          staging=$(mktemp -d)
+          install -D -m 0755 bin/ps5-fan-daemon "$staging/usr/local/bin/ps5-fan-daemon"
+          install -D -m 0644 systemd/ps5-fan-daemon.service "$staging/etc/systemd/system/ps5-fan-daemon.service"
+          for unit in local-fs.target sysinit.target; do
+            printf '[Unit]\nDescription=CI stub\n' > "$staging/etc/systemd/system/$unit"
+          done
+          systemd-analyze verify --root="$staging" ps5-fan-daemon.service
+      - name: Diff whitespace
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          if [ "$EVENT_NAME" = pull_request ]; then
+            base=$BASE_SHA
+            head=$HEAD_SHA
+          else
+            base=$BEFORE_SHA
+            head=$CURRENT_SHA
+            if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then
+              base=$(git rev-parse "$head^" 2>/dev/null || git hash-object -t tree /dev/null)
+            fi
+          fi
+          empty_tree=$(git hash-object -t tree /dev/null)
+          if [ "$base" != "$empty_tree" ]; then
+            git cat-file -e "$base^{commit}"
+          fi
+          git cat-file -e "$head^{commit}"
+          git diff --check "$base" "$head"

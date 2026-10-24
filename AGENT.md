@@ -1,5 +1,9 @@
 # Istruzioni per gli agenti AI
 
+## Ambito di questo repository
+
+Questo repository contiene esclusivamente il controller ventole PS5 e la documentazione/test relativi. Le istruzioni che nominano moduli del patcher originale si applicano soltanto come principi di processo: non copiare né modificare `cleanup.sh`, altri moduli o la pipeline di `ps5-cachy-os-patch`. Il modulo ventole deve rimanere installabile e disinstallabile in autonomia.
+
 Questo file raccoglie le regole operative condivise per gli agenti AI che analizzano o modificano il repository. Le istruzioni sono organizzate in sezioni indipendenti, così da poterle ampliare nel tempo senza stravolgere la struttura esistente.
 
 ## Regola obbligatoria: Gitflow per ogni nuova feature, fix o branch di documentazione
@@ -75,21 +79,9 @@ Se un modulo non dispone ancora di una scheda documentale, creala in `docs/modul
 
 Una fix è documentata soltanto quando la scheda in `docs/fix/` e la voce in `docs/fix/README.md` sono state aggiunte o aggiornate, la documentazione del modulo interessato è allineata e i riferimenti sono stati verificati. Mantieni il livello di precisione, la struttura e il tono tecnico delle schede già presenti: descrizioni concrete e verificabili, nessuna affermazione non dimostrata e nessun test dichiarato come superato senza averne osservato il risultato.
 
-## Regola obbligatoria: isolamento e sanificazione continua degli errori tramite cleanup
+## Gestione degli errori del controller
 
-**Ogni volta che dall'analisi dei log si riscontra un errore, un blocco di processo o una condizione che potrebbe essere bloccante per gli avvii successivi (es. wizard di setup/dialog su tty, lock orfani, drop-in corrotti, loop device o mountpoint residui, filesystem o journal frammentati, configurazioni video non allineate o crash marker), è obbligatorio estendere gli script che si occupano di ripulire lo stato del sistema.**
-
-La bonifica deve essere sempre implementata su entrambi i livelli:
-1. **Livello Host (`lib/modules/cleanup.sh`)**: eseguito durante l'applicazione delle patch da PC, per sanificare filesystem, flag, symlink di systemd e configurazioni prima ancora che la chiavetta venga inserita nella PS5.
-2. **Livello Runtime early-boot (`/usr/local/sbin/ps5-boot-cleanup`)**: eseguito in automatico all'avvio della PS5 tramite `ps5-boot-cleanup.service` prima dell'avvio delle sessioni utente, per neutralizzare processi bloccanti orfani (kill preventivo di dialog o wizard interattivi), smontare mountpoint pendenti, ripulire lock e ripristinare uno stato di boot garantito e funzionante.
-
-Procedura operativa obbligatoria:
-1. **Analisi e diagnosi della traccia di errore nei log**: Identifica con precisione la causa scatenante (processi pendenti su tty1, file marker mancanti o con nomenclatura non allineata come `ps5-first-boot-done`, loop device non deallocati, file journal sporchi dopo crash).
-2. **Estensione combinata dei componenti di cleanup**:
-   - Aggiorna `lib/modules/cleanup.sh` per eliminare la causa alla radice e applicare le contromisure preventive sui file del rootfs.
-   - Aggiorna il generatore interno dello script `/usr/local/sbin/ps5-boot-cleanup` in `lib/modules/cleanup.sh` affinché ogni singolo avvio su PS5 sia protetto anche in caso di crash anomalo o interruzione brutale dell'alimentazione.
-3. **Garantire l'indipendenza e l'immunità tra gli avvii**: Nessun errore derivante da test precedenti, branch alternativi, feature sperimentali o arresti imprevisti deve poter corrompere o impedire gli avvii successivi del sistema.
-4. **Aggiornamento della test suite (`tests/run-tests.sh`)**: Aggiungi test automatizzati che simulino la presenza dell'errore bloccante o dello stato orfano e verifichino che il modulo di cleanup lo bonifichi con successo.
+Questo repository non contiene la pipeline di patching host né moduli di cleanup del progetto originale. Gli errori del controller ventole devono essere gestiti dai propri artefatti: lock in `/run/ps5-fan`, stato runtime atomico, stato `DEGRADED`, disinstallazione dei soli file di proprietà e test deterministici. Non creare o importare componenti di boot cleanup estranei al controller.
 
 ## Come estendere questo file
 

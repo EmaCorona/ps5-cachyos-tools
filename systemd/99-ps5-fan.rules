@@ -1,0 +1,2 @@
+# Deliberately no chmod 0666 and no boot-time target overwrite.
+ACTION=="add", SUBSYSTEM=="platform", KERNEL=="ps5-fan", TAG+="systemd"

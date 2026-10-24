@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -u
+BASE=${PS5_FAN_CONFIG_DIR:-/etc/ps5-fan}; STATE=$BASE/state
+case "${1:-}" in
+  profile)
+    [ "$(id -u)" -eq 0 ] || { echo 'fan: cambio profilo richiede privilegi amministrativi' >&2; exit 1; }; [ "${2:-}" = set ] || { echo "uso: ps5-fan profile set {low|balanced|high}" >&2; exit 2; }; case "${3:-}" in low|balanced|high) mkdir -p "$BASE" || exit 1; [ ! -d "$STATE" ] || { echo "impossibile salvare il profilo: state non è un file" >&2; exit 1; }; tmp=$(mktemp "$STATE.XXXXXX") || exit 1; if ! printf '%s\n' "$3" > "$tmp" || ! mv -f "$tmp" "$STATE"; then rm -f "$tmp"; echo 'impossibile salvare il profilo' >&2; exit 1; fi; echo "profilo salvato: $3 (applicazione entro un ciclo)";; *) echo 'profilo non valido' >&2; exit 2;; esac;;
+  status) [ "$(id -u)" -eq 0 ] || { echo 'fan: status richiede privilegi amministrativi (usare sudo ps5-fan status)' >&2; exit 1; }; [ -r "${PS5_FAN_STATE_FILE:-/run/ps5-fan/runtime.state}" ] && cat "${PS5_FAN_STATE_FILE:-/run/ps5-fan/runtime.state}" || { [ -r "$BASE/runtime.state" ] && cat "$BASE/runtime.state" || echo 'stato non disponibile'; };;
+  uninstall) keep=0; [ "${2:-}" = --keep-config ] && keep=1; [ -z "${2:-}" ] || [ "$keep" -eq 1 ] || { echo 'uso: ps5-fan uninstall [--keep-config]' >&2; exit 2; }; command -v systemctl >/dev/null 2>&1 || { echo 'fan: systemctl non disponibile' >&2; exit 1; }; source /usr/lib/ps5-cachyos-tools/fan.sh || exit 1; module_fan_remove / "$keep";;
+  *) echo 'uso: ps5-fan profile set {low|balanced|high} | status | uninstall [--keep-config]' >&2; exit 2;;
+esac
