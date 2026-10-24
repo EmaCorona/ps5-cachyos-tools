@@ -13,6 +13,35 @@ fi
 source "$BASE/lib/core/log.sh" 2>/dev/null || source "$BASE/core/log.sh"; source "$BASE/lib/core/target.sh" 2>/dev/null || source "$BASE/core/target.sh"; source "$BASE/lib/core/registry.sh" 2>/dev/null || source "$BASE/core/registry.sh"; source "$BASE/lib/core/dependencies.sh" 2>/dev/null || source "$BASE/core/dependencies.sh"; source "$BASE/lib/core/state.sh" 2>/dev/null || source "$BASE/core/state.sh"; source "$BASE/lib/core/installer.sh" 2>/dev/null || source "$BASE/core/installer.sh"; source "$BASE/lib/core/service.sh" 2>/dev/null || source "$BASE/core/service.sh"
 usage() { printf '%s\n' 'uso: ps5-cachyos-tools list | install (--root ROOT [--boot BOOT]|--live) [--module ID] [--dry-run] [--no-start] | check (--root ROOT|--live) | status [--root ROOT|--live] | reset ID --root ROOT | reapply ID [--root ROOT|--live] | remove --module ID --root ROOT [--keep-config|--purge-config]'; }
 need_arg() { [ "$#" -ge 2 ] && [ -n "$2" ] && { printf '%s\n' "$2"; return 0; }; core_die "valore mancante per $1"; return 2; }
+core_cli_status() {
+    local root=$1 id f installed enabled type policy active readiness runtime_state state profile
+    [ -d "$root/var/lib/ps5-cachyos-tools/state/modules" ] || return 1
+    core_registry_discover "$root/usr/lib/ps5-cachyos-tools/modules" >/dev/null 2>&1 || true
+    for id in "${CORE_MODULE_IDS[@]}"; do
+        f="$root/var/lib/ps5-cachyos-tools/state/modules/$id.state"
+        installed=no; [ -f "$root/usr/lib/ps5-cachyos-tools/modules/$id/module.conf" ] && installed=yes
+        enabled=$(core_registry_field "$id" 1 2>/dev/null || echo unknown)
+        type=$(core_registry_field "$id" 2 2>/dev/null || echo unknown)
+        policy=$(core_registry_field "$id" 3 2>/dev/null || echo unknown)
+        active=offline; readiness=not-checked
+        if [ "$root" = / ] && [ "$type" = service ]; then
+            if systemctl is-active --quiet "$(core_registry_field "$id" 7)" 2>/dev/null; then active=yes; else active=no; fi
+            if [ "$active" = yes ] && [ "$id" = fan ] && [ -r /run/ps5-fan/runtime.state ]; then
+                runtime_state=$(awk -F= '$1=="state"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || true)
+                profile=$(awk -F= '$1=="profile_applied"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || true)
+                case "$runtime_state:$profile" in
+                    NORMAL:*|HEATING:*|EMERGENCY:*) readiness=ready ;;
+                    DEGRADED:*) readiness=degraded ;;
+                    *) readiness=not-ready ;;
+                esac
+            elif [ "$active" = no ]; then readiness=not-running; fi
+        fi
+        printf '%s: installed=%s enabled=%s type=%s policy=%s present=yes active=%s readiness=%s ' "$id" "$installed" "$enabled" "$type" "$policy" "$active" "$readiness"
+        [ -f "$f" ] && awk -F= '$1=="status"||$1=="last_attempt_at"||$1=="completed_at"||$1=="last_boot_id"||$1=="reapply_requested"{printf "%s=%s ",$1,$2}' "$f"
+        [ -f "$root/var/lib/ps5-cachyos-tools/state/reapply/$id.request" ] && printf 'reapply_requested=true '
+        printf '\n'
+    done
+}
 main() {
     local cmd=${1-} root='' boot='' module='' live=0 dry=0 no_start=0 keep_config=1; shift || true
     if [[ "$cmd" = reset || "$cmd" = reapply || "$cmd" = remove ]] && [ "$#" -gt 0 ] && [[ "$1" != --* ]]; then module=$1; shift; fi
@@ -33,6 +62,11 @@ main() {
     if [ "$cmd" = status ] && [ -n "$root" ]; then
         root=$(core_target_validate_offline "$root") || return 1
         core_registry_discover "$root/usr/lib/ps5-cachyos-tools/modules" >/dev/null || return 1
+    fi
+    if [ "$cmd" = status ]; then
+        root=${root:-/}
+        core_cli_status "$root"
+        return $?
     fi
     case "$cmd" in
         list) core_registry_discover "$BASE/modules"; core_registry_validate_dependencies;;

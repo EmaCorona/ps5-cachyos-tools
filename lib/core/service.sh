@@ -3,6 +3,7 @@ set -u
 CORE_SERVICE_FILE_CHANGED=0
 CORE_SERVICE_WAS_ENABLED=0
 CORE_SERVICE_WAS_ACTIVE=0
+CORE_SERVICE_READINESS_STATUS=not-checked
 
 core_service_snapshot_state() {
     local root=$1 id=$2 unit
@@ -34,7 +35,7 @@ core_service_transaction_snapshot() {
         systemctl is-enabled --quiet "$unit" && enabled=1 || true
         systemctl is-active --quiet "$unit" && active=1 || true
         systemctl cat "$unit" >/dev/null 2>&1 && present=1 || true
-        grep -Fq "^$unit|" "$backup/.services" || printf '%s|%s|%s|%s\n' "$unit" "$enabled" "$active" "$present" >> "$backup/.services" || return 1
+        awk -F'|' -v wanted="$unit" '$1 == wanted { found=1; exit } END { exit found ? 0 : 1 }' "$backup/.services" || printf '%s|%s|%s|%s\n' "$unit" "$enabled" "$active" "$present" >> "$backup/.services" || return 1
     done <<< "$order"
 }
 
@@ -81,7 +82,7 @@ core_service_restore_state() {
 }
 
 core_service_reapply() {
-    local root=$1 id=$2 unit dep dep_type policy revision boot rc=0 state_root=${CORE_STATE_ROOT:-$root} run_root=${CORE_RUN_ROOT:-$root}
+    local root=$1 id=$2 unit dep dep_type policy revision boot rc=0 state_root=${CORE_STATE_ROOT:-$root} run_root=${CORE_RUN_ROOT:-$root} pre_pid=0 pre_cycles=0 pre_instance=''
     [ "$root" = / ] || return 1
     unit=$(core_registry_field "$id" 7); [ -n "$unit" ] || return 1
     policy=$(core_registry_field "$id" 3); revision=$(core_registry_field "$id" 5); boot=$(core_state_boot_id)
@@ -99,11 +100,17 @@ core_service_reapply() {
         fi
     done
     core_service_snapshot_state / "$id"
+    pre_pid=$(systemctl show -p MainPID --value "$unit" 2>/dev/null || echo 0)
+    pre_pid=${pre_pid:-0}
+    if [ "$id" = fan ] && [ -r /run/ps5-fan/runtime.state ]; then
+        pre_cycles=$(awk -F= '$1=="cycles"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || echo 0)
+        pre_instance=$(awk -F= '$1=="instance_id"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || true)
+    fi
     core_state_write "$state_root" "$id" RUNNING "$policy" "$revision" 0 "$boot" || return 1
     systemctl daemon-reload || rc=$?
     [ "$rc" -ne 0 ] || systemctl restart "$unit" || rc=$?
     [ "$rc" -ne 0 ] || systemctl is-active --quiet "$unit" || rc=1
-    [ "$rc" -ne 0 ] || core_service_readiness "$root" "$id" || rc=1
+    CORE_SERVICE_PRE_PID=$pre_pid CORE_SERVICE_PRE_CYCLES=$pre_cycles CORE_SERVICE_PRE_INSTANCE=$pre_instance CORE_SERVICE_RESTARTED=1 core_service_readiness "$root" "$id" || rc=1
     if [ "$rc" -eq 0 ]; then
         if ! core_state_write "$state_root" "$id" SUCCESS "$policy" "$revision" 0 "$boot"; then
             core_service_restore_state / "$id" || core_log "ROLLBACK_FILES_RESTORED_SERVICE_FAILED: service=$id"
@@ -125,13 +132,29 @@ core_service_source() {
 }
 
 core_service_readiness() {
-    local root=$1 id=$2 hook
+    local root=$1 id=$2 hook rc
+    CORE_SERVICE_READINESS_STATUS=not-checked
     [ "$root" = / ] || return 0
     hook=$(core_registry_field "$id" 11)
     [ -n "$hook" ] || return 0
     hook="${CORE_PREFIX:-/usr/lib/ps5-cachyos-tools}/modules/$id/$hook"
     [ -x "$hook" ] || { core_log "readiness hook assente: $id"; return 1; }
-    CORE_INSTALL_MODE=live CORE_MODULE_ID="$id" "$hook" "$root" || { core_log "readiness check fallito: $id"; return 1; }
+    CORE_INSTALL_MODE=live CORE_MODULE_ID="$id" \
+        CORE_SERVICE_PRE_PID="${CORE_SERVICE_PRE_PID:-0}" \
+        CORE_SERVICE_PRE_CYCLES="${CORE_SERVICE_PRE_CYCLES:-0}" \
+        CORE_SERVICE_PRE_INSTANCE="${CORE_SERVICE_PRE_INSTANCE:-}" \
+        CORE_SERVICE_RESTARTED="${CORE_SERVICE_RESTARTED:-0}" \
+        "$hook" "$root"; rc=$?
+    case "$rc" in
+        0) CORE_SERVICE_READINESS_STATUS=ready; return 0 ;;
+        2) CORE_SERVICE_READINESS_STATUS=degraded; core_log "readiness applicativa degradata: $id"; return 0 ;;
+        *) CORE_SERVICE_READINESS_STATUS=failed; core_log "readiness check fallito: $id (rc=$rc)"; return "$rc" ;;
+    esac
+}
+
+core_service_runtime_changed() {
+    local root=$1 id=$2 marker="${CORE_RUNTIME_CHANGED_FILE:-$root/run/ps5-cachyos-tools/runtime-changed/$id}"
+    [ -f "$marker" ] && grep -qx '1' "$marker"
 }
 
 core_service_install_file() {
@@ -161,7 +184,7 @@ core_service_enable_link() {
 }
 
 core_service_module_install() {
-    local root=$1 repo=$2 id=$3 unit source target wants enabled
+    local root=$1 repo=$2 id=$3 unit source target wants enabled runtime_changed=0 restarted=0 pre_pid=0 pre_cycles=0 pre_instance=''
     unit=$(core_registry_field "$id" 7); [ -n "$unit" ] || return 0
     source=$(core_service_source "$repo" "$unit") || return 1
     core_target_assert_parents "$root" "/etc/systemd/system/$unit" || return 1
@@ -172,6 +195,7 @@ core_service_module_install() {
         grep -Eq "(^|[[:space:]])/etc/systemd/system/$unit([[:space:]]|$)" "$manifest" && managed=1
     done
     core_service_install_file "$source" "$target" 644 "$managed" || return 1
+    core_service_runtime_changed "$root" "$id" && runtime_changed=1 || true
     enabled=$(core_registry_field "$id" 1)
     if [ "$enabled" != true ]; then
         if [ -L "$root/etc/systemd/system/multi-user.target.wants/$unit" ]; then
@@ -191,10 +215,24 @@ core_service_module_install() {
     wants="$root/etc/systemd/system/multi-user.target.wants/$unit"
     core_service_enable_link "$wants" "/etc/systemd/system/$unit" || return 1
     if [ "${CORE_INSTALL_MODE:-offline}" = live ] && [ "$root" = / ] && [ "${PS5_TOOLS_NO_START:-0}" != 1 ]; then
+        if systemctl is-active --quiet "$unit"; then
+            pre_pid=$(systemctl show -p MainPID --value "$unit" 2>/dev/null || echo 0)
+            pre_pid=${pre_pid:-0}
+            if [ "$id" = fan ] && [ -r /run/ps5-fan/runtime.state ]; then
+                pre_cycles=$(awk -F= '$1=="cycles"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || echo 0)
+                pre_instance=$(awk -F= '$1=="instance_id"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || true)
+            fi
+        fi
         systemctl daemon-reload || return 1
         systemctl enable "$unit" || return 1
-        if [ "$CORE_SERVICE_FILE_CHANGED" -eq 1 ]; then systemctl restart "$unit" 2>/dev/null || systemctl start "$unit" || return 1; else systemctl is-active --quiet "$unit" || systemctl start "$unit" || return 1; fi
+        if [ "$CORE_SERVICE_FILE_CHANGED" -eq 1 ] || [ "$runtime_changed" -eq 1 ]; then
+            systemctl restart "$unit" || return 1
+            restarted=1
+        else
+            systemctl is-active --quiet "$unit" || { systemctl start "$unit" || return 1; restarted=1; }
+        fi
         systemctl is-active --quiet "$unit" || { core_log "health check service fallito: $unit"; return 1; }
+        CORE_SERVICE_PRE_PID=$pre_pid CORE_SERVICE_PRE_CYCLES=$pre_cycles CORE_SERVICE_PRE_INSTANCE=$pre_instance CORE_SERVICE_RESTARTED=$restarted
         core_service_readiness "$root" "$id" || return 1
     fi
 }

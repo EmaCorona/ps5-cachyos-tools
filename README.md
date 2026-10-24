@@ -58,6 +58,8 @@ La rimozione live è `sudo ps5-fan uninstall`; la CLI modulare `remove --module 
 
 `sudo ps5-fan status` distingue `profile_configured` da `profile_applied`, target desiderato, osservato e ultimo verificato, sensore, zona, cooldown, contatore di cicli ed errori runtime/configurazione. `sudo ps5-temp` stampa lo stesso stato senza inventare RPM o percentuali. La diagnostica è amministrativa per design; gli utenti non privilegiati non possono modificare profili, target o servizio. I log vanno letti con `journalctl -u ps5-fan-daemon.service`.
 
+Nel framework, `systemctl active` non è da solo una prova di funzionamento applicativo: il manifest fan usa `READINESS_HOOK=readiness.sh`, che riutilizza lo stato runtime del demone e distingue `ready`, `DEGRADED` e timeout. Un aggiornamento del demone o della unit richiede un solo restart; una reinstallazione identica non lo esegue. Le richieste `reapply` pendenti vengono annullate dalla rimozione e ripristinate soltanto se il remove entra in rollback.
+
 ## Limiti e rollback
 
 Il controller non può creare un device sysfs mancante: in quel caso registra `DEGRADED` e non dichiara applicato un target non verificato. La validazione fisica di temperatura, RPM, rumore, throttling e driver PS5 resta necessaria. Gli aggiornamenti creano un backup timestampato in `/var/lib/ps5-cachyos-tools/backups/` e ripristinano i file gestiti se un passaggio dell'installazione fallisce; rieseguire `module_fan_check` dopo il ripristino.
