@@ -206,6 +206,17 @@ else
     no 'fixture reset non installabile'
 fi
 
+traversal_root="$tmp/traversal-root"; traversal_outside="$tmp/traversal-outside"; traversal_backup="$tmp/traversal-backup"
+mkdir -p "$traversal_root" "$traversal_outside" "$traversal_backup"; printf sentinel > "$traversal_outside/sentinel"
+printf '/../../../../%s/sentinel\n' "${traversal_outside#/}" > "$traversal_backup/.paths"; : > "$traversal_backup/.present"
+if core_txn_restore "$traversal_root" "$traversal_backup" >/dev/null 2>&1; then
+    no 'rollback accetta percorso con traversal ..'
+elif [ "$(cat "$traversal_outside/sentinel")" = sentinel ]; then
+    ok 'rollback rifiuta traversal .. senza cancellare fuori root'
+else
+    no 'rollback ha cancellato la sentinella tramite traversal ..'
+fi
+
 state_escape_root="$tmp/state-escape-root"; state_outside="$tmp/state-outside"
 mkdir -p "$state_escape_root" "$state_outside"; ln -s "$state_outside" "$state_escape_root/var"
 if core_state_write "$state_escape_root" fan SUCCESS always 1 0 state-escape >/dev/null 2>&1; then
