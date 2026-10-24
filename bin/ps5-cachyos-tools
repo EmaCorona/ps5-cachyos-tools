@@ -73,7 +73,12 @@ main() {
         core_registry_discover "$root/usr/lib/ps5-cachyos-tools/modules" >/dev/null || return 1
         [ "${CORE_MODULE[$module]+x}" = x ] || { core_die "modulo inesistente: $module"; return 1; }
     fi
-    if [ "$cmd" = status ] && [ -n "$root" ]; then
+    if [ "$cmd" = status ] && [ "$live" -eq 1 ]; then
+        [ -z "$root" ] || { core_die '--live e --root sono incompatibili'; return 2; }
+        root=$(core_target_validate_live) || return 1
+        CORE_CONFIG_ROOT="$root"
+        core_registry_discover "$root/usr/lib/ps5-cachyos-tools/modules" >/dev/null || return 1
+    elif [ "$cmd" = status ] && [ -n "$root" ]; then
         root=$(core_target_validate_offline "$root") || return 1
         CORE_CONFIG_ROOT="$root"
         core_registry_discover "$root/usr/lib/ps5-cachyos-tools/modules" >/dev/null || return 1

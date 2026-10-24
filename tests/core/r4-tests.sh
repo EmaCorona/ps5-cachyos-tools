@@ -154,5 +154,18 @@ else
     no 'rollback ha modificato la sentinella esterna tramite run symlinkato'
 fi
 
+request_escape_root="$tmp/request-escape-root"; request_outside="$tmp/request-outside"
+mkdir -p "$request_escape_root/var/lib/ps5-cachyos-tools/state/reapply" "$request_outside"
+printf request > "$request_outside/fan.request"
+rm -rf "$request_escape_root/var"
+ln -s "$request_outside" "$request_escape_root/var"
+if core_remove_module_artifacts "$request_escape_root" fan >/dev/null 2>&1; then
+    no 'cleanup request accetta var symlinkata'
+elif [ -f "$request_outside/fan.request" ]; then
+    ok 'cleanup request rifiuta var symlinkata senza cancellare fuori root'
+else
+    no 'cleanup request ha cancellato la request esterna'
+fi
+
 printf '%s\n' "$pass test R4 superati, $fail falliti"
 [ "$fail" -eq 0 ]

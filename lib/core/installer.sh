@@ -333,6 +333,7 @@ core_remove_module_artifacts() {
         rm -f -- "$full" || return 1
     done
     request="$root/var/lib/ps5-cachyos-tools/state/reapply/$id.request"
+    core_target_validate_final "$root" "/var/lib/ps5-cachyos-tools/state/reapply/$id.request" "$request" || return 1
     [ ! -e "$request" ] || [ -L "$request" ] || rm -f -- "$request" || return 1
 }
 
