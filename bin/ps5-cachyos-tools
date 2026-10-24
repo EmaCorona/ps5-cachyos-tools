@@ -51,7 +51,7 @@ core_cli_remove_safe() {
     if [ -x "$hook" ]; then core_cli_run_remove_hook "$root" "$module" "$hook" "$keep_config" || remove_rc=$?; else [ "$service_type" != service ] || core_service_module_remove "$root" "$module" || remove_rc=$?; fi
     [ "$remove_rc" -eq 0 ] && core_remove_module_artifacts "$root" "$module" || remove_rc=$?
     if [ "$remove_rc" -eq 0 ]; then core_target_validate_final "$root" "/usr/lib/ps5-cachyos-tools/modules/$module" "$root/usr/lib/ps5-cachyos-tools/modules/$module" || remove_rc=1; core_target_validate_final "$root" "/var/lib/ps5-cachyos-tools/state/modules/$module.state" "$root/var/lib/ps5-cachyos-tools/state/modules/$module.state" || remove_rc=1; fi
-    if [ "$remove_rc" -eq 0 ]; then rm -rf -- "$root/usr/lib/ps5-cachyos-tools/modules/$module" "$root/var/lib/ps5-cachyos-tools/state/modules/$module.state" || remove_rc=$?; fi
+    if [ "$remove_rc" -eq 0 ]; then core_target_remove_path "$root" "/usr/lib/ps5-cachyos-tools/modules/$module" 1 || remove_rc=$?; [ "$remove_rc" -eq 0 ] && core_target_remove_path "$root" "/var/lib/ps5-cachyos-tools/state/modules/$module.state" 1 || remove_rc=$?; fi
     if [ "$remove_rc" -eq 0 ]; then rm -rf -- "$backup"; else core_remove_restore "$root" "$backup" || true; core_service_restore_state "$root" "$module" || true; return "${remove_rc:-1}"; fi
 }
 core_cli_reapply_legacy() {

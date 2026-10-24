@@ -134,8 +134,7 @@ core_install_body() {
     identity="$root/var/lib/ps5-cachyos-tools/install.identity"
     core_target_validate_final "$root" /var/lib/ps5-cachyos-tools/install.identity "$identity" || return 1
     if [ ! -f "$identity" ]; then
-        printf '%s\n' "$(date +%s)-$(id -u)-$root" > "$identity" || return 1
-        chmod 600 "$identity" || return 1
+        core_target_write_file "$root" /var/lib/ps5-cachyos-tools/install.identity 600 "$(date +%s)-$(id -u)-$root" || return 1
     fi
     core_registry_validate_owned_paths || return 1
     core_registry_validate_dependencies || return 1
@@ -244,15 +243,15 @@ core_txn_restore() {
     while IFS= read -r path; do
         [ -n "$path" ] || continue
         core_target_validate_final "$root" "$path" "$root$path" || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-paths"; continue; }
-        rm -rf -- "$root$path" || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-paths"; }
+        core_target_remove_path "$root" "$path" 1 || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-paths"; }
         if grep -Fxq "$path" "$backup/.present" 2>/dev/null; then
             core_target_assert_parents "$root" "$path" || { result=1; continue; }
             mkdir -p "$root$(dirname "$path")" || result=1
-            cp -a -- "$backup$path" "$root$path" || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-paths"; }
+            core_target_copy_file "$root" "$path" "$backup$path" || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-paths"; }
         fi
     done < "$backup/.paths"
     if core_target_validate_final "$root" /run/ps5-cachyos-tools/runtime-changed "$root/run/ps5-cachyos-tools/runtime-changed"; then
-        rm -rf -- "$root/run/ps5-cachyos-tools/runtime-changed" || result=1
+        core_target_remove_path "$root" /run/ps5-cachyos-tools/runtime-changed 1 || result=1
     else
         result=1
         printf '%s\n' /run/ps5-cachyos-tools/runtime-changed >> "$backup/.rollback-failed-paths"

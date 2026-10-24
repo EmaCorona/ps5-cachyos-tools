@@ -48,6 +48,40 @@ module_fan_validate_write_path() {
     fi
 }
 
+module_fan_remove_path() {
+    local root=$1 path=$2 recursive=${3:-0} parent fd name expected actual
+    module_fan_validate_write_path "$root" "$path" || return 1
+    parent=$(dirname "$path"); [ -d "$root$parent" ] && [ ! -L "$root$parent" ] || return 1
+    exec {fd}<"$root$parent" || return 1
+    expected=$(realpath -e -- "$root$parent") || { exec {fd}<&-; return 1; }
+    actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }
+    [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
+    name=$(basename "$path")
+    if [ "$recursive" -eq 1 ]; then rm -rf -- "/proc/self/fd/$fd/$name"; else rm -f -- "/proc/self/fd/$fd/$name"; fi
+    local rc=$?; exec {fd}<&-; return "$rc"
+}
+
+module_fan_restore_copy() {
+    local root=$1 path=$2 source=$3 parent fd name tmp rc
+    module_fan_validate_write_path "$root" "$path" || return 1
+    parent=$(dirname "$path"); [ -d "$root$parent" ] && [ ! -L "$root$parent" ] || return 1
+    exec {fd}<"$root$parent" || return 1
+    name=$(basename "$path"); tmp=$(mktemp "/proc/self/fd/$fd/.$name.XXXXXX") || { exec {fd}<&-; return 1; }
+    rm -f -- "$tmp" || { exec {fd}<&-; return 1; }
+    cp -a -- "$source" "$tmp" || { rm -rf -- "$tmp"; exec {fd}<&-; return 1; }
+    mv -f -- "$tmp" "/proc/self/fd/$fd/$name"; rc=$?; [ "$rc" -eq 0 ] || rm -f -- "$tmp"; exec {fd}<&-; return "$rc"
+}
+
+module_fan_rmdir_path() {
+    local root=$1 path=$2 parent fd name expected actual rc
+    module_fan_validate_write_path "$root" "$path" || return 1
+    parent=$(dirname "$path"); exec {fd}<"$root$parent" || return 1
+    expected=$(realpath -e -- "$root$parent") || { exec {fd}<&-; return 1; }
+    actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }
+    [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
+    rmdir -- "/proc/self/fd/$fd/$(basename "$path")" 2>/dev/null; rc=$?; exec {fd}<&-; return "$rc"
+}
+
 module_fan_validate_write_set() {
     local root=$1 path
     for path in /etc/ps5-fan /etc/ps5-fan/profiles /usr/lib/ps5-cachyos-tools /usr/local/bin /etc/systemd/system /etc/systemd/system/multi-user.target.wants /etc/udev/rules.d; do
@@ -122,10 +156,10 @@ module_fan_restore() {
         [ -n "$path" ] || continue
         module_fan_validate_write_path "$root" "$path" || { echo "fan: rollback rifiutato per topologia non sicura: $path" >&2; failed=1; continue; }
         if [ -e "$backup$path" ] || [ -L "$backup$path" ]; then
-            rm -rf -- "$root$path" || { echo "fan: rollback: impossibile rimuovere $path" >&2; failed=1; continue; }
-            mkdir -p "$root$(dirname "$path")" && cp -a -- "$backup$path" "$root$path" || { echo "fan: rollback fallito: $path" >&2; failed=1; }
+            module_fan_remove_path "$root" "$path" 1 || { echo "fan: rollback: impossibile rimuovere $path" >&2; failed=1; continue; }
+            module_fan_restore_copy "$root" "$path" "$backup$path" || { echo "fan: rollback fallito: $path" >&2; failed=1; }
         else
-            rm -rf -- "$root$path" || { echo "fan: rollback: impossibile rimuovere il nuovo artefatto $path" >&2; failed=1; }
+            module_fan_remove_path "$root" "$path" 1 || { echo "fan: rollback: impossibile rimuovere il nuovo artefatto $path" >&2; failed=1; }
         fi
     done < <(module_fan_all_paths)
     return "$failed"
@@ -136,9 +170,9 @@ module_fan_restore_extra() {
     for path in /etc/ps5-fan/fan.conf /etc/ps5-fan/state /etc/ps5-fan/profiles/low.conf /etc/ps5-fan/profiles/balanced.conf /etc/ps5-fan/profiles/high.conf; do
         module_fan_validate_write_path "$root" "$path" || return 1
         if [ -e "$backup$path" ] || [ -L "$backup$path" ]; then
-            rm -rf -- "$root$path" && mkdir -p "$root$(dirname "$path")" && cp -a -- "$backup$path" "$root$path" || return 1
+            module_fan_remove_path "$root" "$path" 1 && module_fan_restore_copy "$root" "$path" "$backup$path" || return 1
         else
-            rm -f -- "$root$path" || return 1
+            module_fan_remove_path "$root" "$path" || return 1
         fi
     done
 }
@@ -146,7 +180,7 @@ module_fan_restore_extra() {
 module_fan_remove_user_files() {
     local root=$1 keep=$2 path
     [ "$keep" = 1 ] && return 0
-    for path in fan.conf state profiles/low.conf profiles/balanced.conf profiles/high.conf; do module_fan_validate_write_path "$root" "/etc/ps5-fan/$path" || return 1; rm -f -- "$root/etc/ps5-fan/$path" || return 1; done
+    for path in fan.conf state profiles/low.conf profiles/balanced.conf profiles/high.conf; do module_fan_remove_path "$root" "/etc/ps5-fan/$path" || return 1; done
 }
 
 module_fan_restore_service() {
@@ -281,9 +315,9 @@ module_fan_remove() {
         done
     fi
     if [ "$framework_managed" != 1 ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then systemctl disable --now ps5-fan-daemon.service || { echo "fan: arresto/disabilitazione fallita; nessuna rimozione eseguita" >&2; module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; return 1; }; fi
-    while IFS= read -r path; do module_fan_validate_write_path "$root" "$path" || { echo "fan: rimozione topologia non sicura: $path" >&2; return 1; }; rm -f -- "$root$path" || { echo "fan: rimozione fallita: $path" >&2; module_fan_restore "$root" "$backup"; [ "$keep" = 1 ] || module_fan_restore_extra "$root" "$backup" || true; [ "$framework_managed" = 1 ] || module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; echo "fan: rollback incompleto" >&2; return 1; }; done < <(module_fan_all_paths)
+    while IFS= read -r path; do module_fan_remove_path "$root" "$path" || { echo "fan: rimozione fallita: $path" >&2; module_fan_restore "$root" "$backup"; [ "$keep" = 1 ] || module_fan_restore_extra "$root" "$backup" || true; [ "$framework_managed" = 1 ] || module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; echo "fan: rollback incompleto" >&2; return 1; }; done < <(module_fan_all_paths)
     module_fan_remove_user_files "$root" "$keep" || { echo "fan: rimozione configurazione fallita" >&2; module_fan_restore "$root" "$backup"; [ "$keep" = 1 ] || module_fan_restore_extra "$root" "$backup" || true; [ "$framework_managed" = 1 ] || module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; echo "fan: rollback incompleto" >&2; return 1; }
-    module_fan_validate_write_path "$root" /etc/ps5-fan/profiles || return 1; module_fan_validate_write_path "$root" /etc/ps5-fan || return 1; rmdir "$root/etc/ps5-fan/profiles" 2>/dev/null || true; rmdir "$root/etc/ps5-fan" 2>/dev/null || true
+    module_fan_rmdir_path "$root" /etc/ps5-fan/profiles || true; module_fan_rmdir_path "$root" /etc/ps5-fan || true
     if [ "$framework_managed" != 1 ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload || { echo "fan: daemon-reload fallito dopo rimozione" >&2; module_fan_restore "$root" "$backup" || true; [ "$keep" = 1 ] || module_fan_restore_extra "$root" "$backup" || true; systemctl daemon-reload 2>/dev/null || true; module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; return 1; }; if systemctl is-active --quiet ps5-fan-daemon.service || systemctl is-enabled --quiet ps5-fan-daemon.service; then echo "fan: servizio ancora active/enabled dopo rimozione" >&2; module_fan_restore "$root" "$backup" || true; [ "$keep" = 1 ] || module_fan_restore_extra "$root" "$backup" || true; systemctl daemon-reload 2>/dev/null || true; module_fan_restore_service "$root" "$service_was_active" "$service_was_enabled" || true; return 1; fi; fi
     echo "fan: disinstallazione completata; file utente non rimossi"
 }
@@ -323,7 +357,7 @@ module_fan_run() {
         module_fan_rollback_result=ROLLBACK_FAILED
         local filesystem_result=0 service_result=0
         if [ "$backup_state" = BACKUP_CREATED ]; then backup_state=ROLLBACK_IN_PROGRESS; module_fan_restore "$root" "$backup_dir" || filesystem_result=1; module_fan_restore_extra "$root" "$backup_dir" || filesystem_result=1; [ "$filesystem_result" -eq 0 ] && backup_state=ROLLBACK_COMPLETED || backup_state=ROLLBACK_FAILED
-        else for path in "${managed[@]}" /etc/ps5-fan/fan.conf /etc/ps5-fan/state /etc/ps5-fan/profiles/low.conf /etc/ps5-fan/profiles/balanced.conf /etc/ps5-fan/profiles/high.conf; do rm -rf -- "$root$path" || { filesystem_result=1; echo "fan: rollback nuovo artefatto fallito: $path" >&2; }; done; fi
+        else for path in "${managed[@]}" /etc/ps5-fan/fan.conf /etc/ps5-fan/state /etc/ps5-fan/profiles/low.conf /etc/ps5-fan/profiles/balanced.conf /etc/ps5-fan/profiles/high.conf; do module_fan_remove_path "$root" "$path" 1 || { filesystem_result=1; echo "fan: rollback nuovo artefatto fallito: $path" >&2; }; done; fi
         [ "${CORE_FRAMEWORK_MANAGED:-0}" = 1 ] || module_fan_restore_service "$root" "$active_before" "$enabled_before" || service_result=1
         if [ "$filesystem_result" -ne 0 ]; then module_fan_rollback_result=ROLLBACK_PARTIAL; elif [ "$service_result" -ne 0 ]; then module_fan_rollback_result=ROLLBACK_FILES_RESTORED_SERVICE_FAILED; else module_fan_rollback_result=ROLLBACK_COMPLETED; fi
         echo "fan: $module_fan_rollback_result" >&2

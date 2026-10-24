@@ -142,6 +142,48 @@ core_target_validate_final() {
     fi
 }
 
+core_target_parent_fd() {
+    local root=$1 path=$2 parent full expected actual fd
+    core_target_assert_parents "$root" "$path" || return 1
+    parent=$(dirname "$path")
+    full=$root$parent
+    [ -d "$full" ] && [ ! -L "$full" ] || return 1
+    exec {fd}<"$full" || return 1
+    expected=$(realpath -e -- "$full") || { exec {fd}<&-; return 1; }
+    actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }
+    [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
+    CORE_TARGET_PARENT_FD=$fd
+}
+
+core_target_remove_path() {
+    local root=$1 path=$2 recursive=${3:-0} fd name
+    core_target_parent_fd "$root" "$path" || return 1
+    fd=$CORE_TARGET_PARENT_FD; name=$(basename "$path")
+    if [ "$recursive" -eq 1 ]; then rm -rf -- "/proc/self/fd/$fd/$name"; else rm -f -- "/proc/self/fd/$fd/$name"; fi
+    local rc=$?; exec {fd}<&-; return "$rc"
+}
+
+core_target_write_file() {
+    local root=$1 path=$2 mode=$3 content=$4 fd name tmp rc
+    core_target_parent_fd "$root" "$path" || return 1
+    fd=$CORE_TARGET_PARENT_FD; name=$(basename "$path")
+    tmp=$(mktemp "/proc/self/fd/$fd/.$name.XXXXXX") || { exec {fd}<&-; return 1; }
+    printf '%s\n' "$content" > "$tmp" || { rm -f -- "$tmp"; exec {fd}<&-; return 1; }
+    chmod "$mode" -- "$tmp" || { rm -f -- "$tmp"; exec {fd}<&-; return 1; }
+    mv -f -- "$tmp" "/proc/self/fd/$fd/$name"; rc=$?; [ "$rc" -eq 0 ] || rm -f -- "$tmp"; exec {fd}<&-; return "$rc"
+}
+
+core_target_copy_file() {
+    local root=$1 path=$2 source=$3 fd name tmp rc
+    [ -f "$source" ] && [ ! -L "$source" ] || return 1
+    core_target_parent_fd "$root" "$path" || return 1
+    fd=$CORE_TARGET_PARENT_FD; name=$(basename "$path")
+    tmp=$(mktemp "/proc/self/fd/$fd/.$name.XXXXXX") || { exec {fd}<&-; return 1; }
+    rm -f -- "$tmp" || { exec {fd}<&-; return 1; }
+    cp -a -- "$source" "$tmp" || { rm -rf -- "$tmp"; exec {fd}<&-; return 1; }
+    mv -f -- "$tmp" "/proc/self/fd/$fd/$name"; rc=$?; [ "$rc" -eq 0 ] || rm -f -- "$tmp"; exec {fd}<&-; return "$rc"
+}
+
 core_target_validate_live() {
     [ "$(id -u)" -eq 0 ] || { core_die 'modalità live richiede root'; return 1; }
     [ "$(realpath -e /)" = / ] || return 1
