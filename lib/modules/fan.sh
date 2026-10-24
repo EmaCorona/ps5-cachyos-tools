@@ -7,11 +7,18 @@ module_fan_install_copy() {
     if [ -f "$target" ] && [ ! -L "$target" ]; then
         source_id=$(stat -c '%d:%i' -- "$source" 2>/dev/null) || return 1
         target_id=$(stat -c '%d:%i' -- "$target" 2>/dev/null) || return 1
-        if [ "$source_id" = "$target_id" ]; then chmod "$mode" -- "$target"; return $?; fi
+        if [ "$source_id" = "$target_id" ]; then module_fan_chmod_path "${CORE_TARGET_ROOT:-/}" "${target#"${CORE_TARGET_ROOT:-/}"}" "$mode"; return $?; fi
     fi
-    if [ -f "$target" ] && cmp -s -- "$source" "$target"; then chmod "$mode" -- "$target"; return; fi
+    if [ -f "$target" ] && cmp -s -- "$source" "$target"; then module_fan_chmod_path "${CORE_TARGET_ROOT:-/}" "${target#"${CORE_TARGET_ROOT:-/}"}" "$mode"; return; fi
     [ ! -L "$target" ] || return 1
-    install -m "$mode" -- "$source" "$target"
+    module_fan_restore_copy "${CORE_TARGET_ROOT:-/}" "${target#"${CORE_TARGET_ROOT:-/}"}" "$source" && module_fan_chmod_path "${CORE_TARGET_ROOT:-/}" "${target#"${CORE_TARGET_ROOT:-/}"}" "$mode"
+}
+
+module_fan_chmod_path() {
+    local root=$1 path=$2 mode=$3 parent fd name rc
+    module_fan_validate_write_path "$root" "$path" || return 1
+    parent=$(dirname "$path"); exec {fd}<"$root$parent" || return 1
+    name=$(basename "$path"); chmod "$mode" -- "/proc/self/fd/$fd/$name"; rc=$?; exec {fd}<&-; return "$rc"
 }
 
 module_fan_info() { echo "PS5 fan controller: 15 zones, Low/Balanced/High, fail-safe target_temp"; }
@@ -51,13 +58,14 @@ module_fan_validate_write_path() {
 module_fan_remove_path() {
     local root=$1 path=$2 recursive=${3:-0} parent fd name expected actual
     module_fan_validate_write_path "$root" "$path" || return 1
+    [ -e "$root$path" ] || [ -L "$root$path" ] || return 0
     parent=$(dirname "$path"); [ -d "$root$parent" ] && [ ! -L "$root$parent" ] || return 1
     exec {fd}<"$root$parent" || return 1
     expected=$(realpath -e -- "$root$parent") || { exec {fd}<&-; return 1; }
     actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }
     [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
     name=$(basename "$path")
-    if [ "$recursive" -eq 1 ]; then rm -rf -- "/proc/self/fd/$fd/$name"; else rm -f -- "/proc/self/fd/$fd/$name"; fi
+    if [ -L "$root$path" ] || [ "$recursive" -ne 1 ]; then rm -f -- "/proc/self/fd/$fd/$name"; else rm -rf -- "/proc/self/fd/$fd/$name"; fi
     local rc=$?; exec {fd}<&-; return "$rc"
 }
 
@@ -333,6 +341,7 @@ module_fan_run() {
         current="${current%/}/$part"
         [ ! -L "$current" ] || { echo "fan: antenato root symlink non autorizzato: $current" >&2; return 1; }
     done
+    CORE_TARGET_ROOT=$root
     module_fan_validate_write_set "$root" || return 1
     local repo_dir
     if [ -n "${CORE_REPO:-}" ] && [ -d "$CORE_REPO/config" ]; then

@@ -159,7 +159,7 @@ core_target_remove_path() {
     local root=$1 path=$2 recursive=${3:-0} fd name
     core_target_parent_fd "$root" "$path" || return 1
     fd=$CORE_TARGET_PARENT_FD; name=$(basename "$path")
-    if [ "$recursive" -eq 1 ]; then rm -rf -- "/proc/self/fd/$fd/$name"; else rm -f -- "/proc/self/fd/$fd/$name"; fi
+    if [ -L "$root$path" ] || [ "$recursive" -ne 1 ]; then rm -f -- "/proc/self/fd/$fd/$name"; else rm -rf -- "/proc/self/fd/$fd/$name"; fi
     local rc=$?; exec {fd}<&-; return "$rc"
 }
 
@@ -182,6 +182,13 @@ core_target_copy_file() {
     rm -f -- "$tmp" || { exec {fd}<&-; return 1; }
     cp -a -- "$source" "$tmp" || { rm -rf -- "$tmp"; exec {fd}<&-; return 1; }
     mv -f -- "$tmp" "/proc/self/fd/$fd/$name"; rc=$?; [ "$rc" -eq 0 ] || rm -f -- "$tmp"; exec {fd}<&-; return "$rc"
+}
+
+core_target_chmod() {
+    local root=$1 path=$2 mode=$3 fd name rc
+    core_target_parent_fd "$root" "$path" || return 1
+    fd=$CORE_TARGET_PARENT_FD; name=$(basename "$path")
+    chmod "$mode" -- "/proc/self/fd/$fd/$name"; rc=$?; exec {fd}<&-; return "$rc"
 }
 
 core_target_validate_live() {

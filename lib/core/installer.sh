@@ -13,23 +13,24 @@ core_txn_lock() {
 }
 
 core_install_copy() {
-    local source=$1 target=$2 mode=$3 source_id target_id
+    local source=$1 target=$2 mode=$3 source_id target_id root path
     [ -f "$source" ] || return 1
     [ ! -L "$source" ] || return 1
     if [ -f "$target" ] && [ ! -L "$target" ]; then
         source_id=$(stat -c '%d:%i' -- "$source" 2>/dev/null) || return 1
         target_id=$(stat -c '%d:%i' -- "$target" 2>/dev/null) || return 1
         if [ "$source_id" = "$target_id" ]; then
-            chmod "$mode" -- "$target" || return 1
+            root=${CORE_CONFIG_ROOT:-/}; path=${target#"$root"}; [ "$root" = / ] && path=$target; core_target_chmod "$root" "$path" "$mode" || return 1
             return 0
         fi
     fi
     if [ -f "$target" ] && cmp -s -- "$source" "$target"; then
-        chmod "$mode" -- "$target" || return 1
+        root=${CORE_CONFIG_ROOT:-/}; path=${target#"$root"}; [ "$root" = / ] && path=$target; core_target_chmod "$root" "$path" "$mode" || return 1
         return 0
     fi
     [ ! -L "$target" ] || { core_log "target install symlink non autorizzato: $target"; return 1; }
-    install -m "$mode" -- "$source" "$target"
+    root=${CORE_CONFIG_ROOT:-/}; path=${target#"$root"}; [ "$root" = / ] && path=$target
+    core_target_copy_file "$root" "$path" "$source" && core_target_chmod "$root" "$path" "$mode"
 }
 
 core_install_module_valid() {
