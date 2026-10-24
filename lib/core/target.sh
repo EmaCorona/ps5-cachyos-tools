@@ -89,6 +89,7 @@ core_target_prepare_dir() {
 core_target_assert_parents() {
     local root=$1 path=$2 part current resolved target_path
     [[ "$path" = /* ]] || return 1
+    [ "$root" = / ] || { [ -d "$root" ] && [ ! -L "$root" ] || return 1; }
     current=${root%/}
     [ -n "$current" ] || current=/
     target_path="$root$path"; [ "$root" = / ] && target_path="$path"

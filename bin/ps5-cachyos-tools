@@ -16,9 +16,11 @@ need_arg() { [ "$#" -ge 2 ] && [ -n "$2" ] && { printf '%s\n' "$2"; return 0; };
 core_cli_status() {
     local root=$1 id f installed enabled type policy active readiness runtime_state state profile present pid cycles updated_at instance_id now
     [ -d "$root/var/lib/ps5-cachyos-tools/state/modules" ] || return 1
-    core_registry_discover "$root/usr/lib/ps5-cachyos-tools/modules" >/dev/null 2>&1 || true
+    core_target_validate_final "$root" /var/lib/ps5-cachyos-tools/state/modules "$root/var/lib/ps5-cachyos-tools/state/modules" || return 1
+    core_registry_discover "$root/usr/lib/ps5-cachyos-tools/modules" >/dev/null 2>&1 || return 1
     for id in "${CORE_MODULE_IDS[@]}"; do
         f="$root/var/lib/ps5-cachyos-tools/state/modules/$id.state"
+        core_target_validate_final "$root" "/var/lib/ps5-cachyos-tools/state/modules/$id.state" "$f" || return 1
         installed=no; [ -f "$root/usr/lib/ps5-cachyos-tools/modules/$id/module.conf" ] && installed=yes
         present=no; [ -d "$root/usr/lib/ps5-cachyos-tools/modules/$id" ] && present=yes
         enabled=$(core_registry_field "$id" 1 2>/dev/null || echo unknown)
@@ -52,6 +54,7 @@ core_cli_status() {
         fi
         printf '%s: installed=%s enabled=%s type=%s policy=%s present=%s active=%s readiness=%s ' "$id" "$installed" "$enabled" "$type" "$policy" "$present" "$active" "$readiness"
         [ -f "$f" ] && awk -F= '$1=="status"||$1=="last_attempt_at"||$1=="completed_at"||$1=="last_boot_id"||$1=="reapply_requested"{printf "%s=%s ",$1,$2}' "$f"
+        core_target_validate_final "$root" "/var/lib/ps5-cachyos-tools/state/reapply/$id.request" "$root/var/lib/ps5-cachyos-tools/state/reapply/$id.request" || return 1
         [ -f "$root/var/lib/ps5-cachyos-tools/state/reapply/$id.request" ] && printf 'reapply_requested=true '
         printf '\n'
     done

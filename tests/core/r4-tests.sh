@@ -226,5 +226,14 @@ else
     no 'boot runner lock ha scritto fuori root tramite run symlinkato'
 fi
 
+root_link="$tmp/root-link"; root_link_target="$tmp/root-link-target"; mkdir -p "$root_link_target"; ln -s "$root_link_target" "$root_link"
+if core_txn_lock "$root_link" >/dev/null 2>&1; then
+    no 'transaction lock accetta root symlinkata'
+elif [ -z "$(find "$root_link_target" -mindepth 1 -print -quit)" ]; then
+    ok 'transaction lock rifiuta root symlinkata senza scrivere fuori root'
+else
+    no 'transaction lock ha scritto fuori root tramite root symlinkata'
+fi
+
 printf '%s\n' "$pass test R4 superati, $fail falliti"
 [ "$fail" -eq 0 ]
