@@ -2,7 +2,7 @@
 
 ## Ambito di questo repository
 
-Questo repository contiene esclusivamente il controller ventole PS5 e la documentazione/test relativi. Le istruzioni che nominano moduli del patcher originale si applicano soltanto come principi di processo: non copiare né modificare `cleanup.sh`, altri moduli o la pipeline di `ps5-cachy-os-patch`. Il modulo ventole deve rimanere installabile e disinstallabile in autonomia.
+Questo repository contiene il framework modulare PS5 e il controller ventole, con documentazione/test relativi. Le istruzioni che nominano moduli del patcher originale si applicano soltanto come principi di processo: non copiare né modificare `cleanup.sh`, altri moduli o la pipeline di `ps5-cachy-os-patch`. Il modulo ventole deve rimanere installabile e disinstallabile in autonomia; nuovi moduli devono essere scoperti tramite manifest e non tramite liste hardcoded.
 
 Questo file raccoglie le regole operative condivise per gli agenti AI che analizzano o modificano il repository. Le istruzioni sono organizzate in sezioni indipendenti, così da poterle ampliare nel tempo senza stravolgere la struttura esistente.
 

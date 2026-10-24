@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -u
+root=$1
+source "$root/usr/lib/ps5-cachyos-tools/fan.sh" 2>/dev/null || exit 1
+module_fan_check "$root"

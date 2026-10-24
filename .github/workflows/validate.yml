@@ -18,11 +18,11 @@ jobs:
       - name: Install static tools
         run: sudo apt-get update && sudo apt-get install --no-install-recommends -y shellcheck systemd
       - name: Bash syntax
-        run: bash -n bin/ps5-fan bin/ps5-fan-daemon bin/ps5-temp lib/modules/fan.sh tests/run-tests.sh
+        run: bash -n bin/ps5-fan bin/ps5-fan-daemon bin/ps5-temp lib/modules/fan.sh bin/ps5-cachyos-tools lib/core/*.sh modules/fan/*.sh tests/run-tests.sh tests/core/run-tests.sh
       - name: ShellCheck
-        run: shellcheck --severity=error bin/ps5-fan bin/ps5-fan-daemon bin/ps5-temp lib/modules/fan.sh tests/run-tests.sh
+        run: shellcheck --severity=error bin/ps5-fan bin/ps5-fan-daemon bin/ps5-temp lib/modules/fan.sh bin/ps5-cachyos-tools lib/core/*.sh modules/fan/*.sh tests/run-tests.sh tests/core/run-tests.sh
       - name: Tests
-        run: bash tests/run-tests.sh
+        run: bash tests/run-tests.sh && bash tests/core/run-tests.sh
       - name: systemd unit syntax
         run: |
           staging=$(mktemp -d)
@@ -32,6 +32,12 @@ jobs:
             printf '[Unit]\nDescription=CI stub\n' > "$staging/etc/systemd/system/$unit"
           done
           systemd-analyze verify --root="$staging" ps5-fan-daemon.service
+          install -D -m 0755 lib/core/boot-runner.sh "$staging/usr/lib/ps5-cachyos-tools/boot-runner"
+          install -D -m 0644 systemd/ps5-tools-early.service "$staging/etc/systemd/system/ps5-tools-early.service"
+          install -D -m 0644 systemd/ps5-tools-boot.service "$staging/etc/systemd/system/ps5-tools-boot.service"
+          printf '[Unit]\nDescription=CI stub\n' > "$staging/etc/systemd/system/basic.target"
+          printf '[Unit]\nDescription=CI stub\n' > "$staging/etc/systemd/system/multi-user.target"
+          systemd-analyze verify --root="$staging" ps5-tools-early.service ps5-tools-boot.service
       - name: Diff whitespace
         env:
           EVENT_NAME: ${{ github.event_name }}

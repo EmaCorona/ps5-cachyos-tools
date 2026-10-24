@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -u
+BASE=$(cd "$(dirname "$0")/.." && pwd)
+source "$BASE/lib/core/log.sh"; source "$BASE/lib/core/target.sh"; source "$BASE/lib/core/registry.sh"; source "$BASE/lib/core/dependencies.sh"; source "$BASE/lib/core/installer.sh"; source "$BASE/lib/core/service.sh"; source "$BASE/lib/modules/fan.sh"
+usage() { printf '%s\n' 'uso: ps5-cachyos-tools install --root ROOT [--boot BOOT] [--module ID] [--dry-run] | install --live [--module ID] | list | check --root ROOT | status [--root ROOT|--live] | reset ID --root ROOT | remove --root ROOT --module fan'; }
+need_arg() { [ "$#" -ge 2 ] && [ -n "$2" ] && { printf '%s\n' "$2"; return 0; }; core_die "valore mancante per $1"; return 2; }
+main() {
+    local cmd=${1-} root='' boot='' module='' live=0 dry=0 no_start=0; shift || true
+    if [ "$cmd" = reset ] && [ "$#" -gt 0 ] && [[ "$1" != --* ]]; then module=$1; shift; fi
+    while [ "$#" -gt 0 ]; do case "$1" in --root) root=$(need_arg "$1" "${2-}") || return $?; shift 2;; --boot) boot=$(need_arg "$1" "${2-}") || return $?; shift 2;; --live) live=1; shift;; --module) module=$(need_arg "$1" "${2-}") || return $?; shift 2;; --dry-run) dry=1; shift;; --no-start) no_start=1; shift;; --force|--all) shift;; --help|-h) usage; return 0;; *) core_die "opzione sconosciuta: $1"; return 2;; esac; done
+    case "$cmd" in
+        list) core_registry_discover "$BASE/modules"; core_registry_validate_dependencies;;
+        install) if [ "$live" -eq 1 ]; then root=$(core_target_validate_live) || return 1; else root=$(core_target_validate_offline "$root" "$boot") || return 1; fi; [ "$dry" -eq 0 ] || { core_log "dry-run: target=$root module=${module:-all}"; return 0; }; PS5_TOOLS_NO_START=$no_start core_install "$root" "$BASE" "$module" || return 1; core_service_install "$root" "$BASE" || return 1; if [ "$live" -eq 1 ] && [ "$no_start" -eq 0 ]; then systemctl daemon-reload && systemctl enable ps5-tools-early.service ps5-tools-boot.service; fi;;
+        check) root=$(core_target_validate_offline "$root") || return 1; core_registry_discover "$root/usr/lib/ps5-cachyos-tools/modules" >/dev/null || return 1; for id in "${CORE_MODULE_IDS[@]}"; do [ -x "$root/usr/lib/ps5-cachyos-tools/modules/$id/check.sh" ] && "$root/usr/lib/ps5-cachyos-tools/modules/$id/check.sh" "$root" || return 1; done;;
+        reset) [[ "$module" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { core_die 'ID modulo non valido'; return 2; }; root=$(core_target_validate_offline "$root") || return 1; rm -f -- "$root/var/lib/ps5-cachyos-tools/state/modules/$module.state";;
+        remove) root=$(core_target_validate_offline "$root") || return 1; [ "$module" = fan ] || { core_die 'remove supporta attualmente solo --module fan'; return 2; }; source "$root/usr/lib/ps5-cachyos-tools/fan.sh"; module_fan_remove "$root" 0;;
+        status) root=${root:-/}; [ -d "$root/var/lib/ps5-cachyos-tools/state/modules" ] || return 1; find "$root/var/lib/ps5-cachyos-tools/state/modules" -type f -name '*.state' -print | sort | while IFS= read -r f; do printf '%s: ' "${f##*/}"; awk -F= '$1=="status"{print $2}' "$f"; done;;
+        *) usage; return 2;;
+    esac
+}
+main "$@"

@@ -1,0 +1,14 @@
+[Unit]
+Description=PS5 CachyOS Tools normal module tasks
+After=local-fs.target ps5-tools-early.service
+Requires=ps5-tools-early.service
+Wants=local-fs.target
+Before=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/ps5-cachyos-tools/boot-runner normal
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

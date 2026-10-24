@@ -1,5 +1,7 @@
 # Registro fix
 
+- 2026-10-24 — [refactor del framework modulare](fix-modular-framework.md): discovery, target offline/live, state store e runner iniziali; validazione hardware ancora da eseguire.
+
 - 2026-10-24 — [`3392ca1`](fix-3392ca142be6f-profile-state-required.md): daemon e readiness rifiutano lo stato profilo assente.
 - 2026-10-24 — [`a16699c`](fix-a16699c48105c-profile-polling-validation.md): nessun fallback per stato readiness assente e polling override coerente; rollback update coperto.
 - 2026-10-24 — [`b899122`](fix-b899122836c1-decimal-timeout.md): parsing decimale e validazione coerente dei timeout di readiness.

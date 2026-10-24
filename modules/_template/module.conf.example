@@ -1,0 +1,9 @@
+ID=example
+NAME="Example disabled task"
+ENABLED=false
+TYPE=task
+RUN_POLICY=once
+BOOT_PHASE=normal
+REVISION=1
+DEPENDENCIES=
+FAILURE_POLICY=continue

@@ -1,6 +1,6 @@
 # ps5-cachyos-tools
 
-Controller autonomo per il target termico `ps5-fan` su PS5 Linux. Il progetto è stato estratto da `ps5-cachy-os-patch` alla revisione `aa555bacfb343ddae02e32784dc4e46d964c6e32`; il repository originale non viene modificato.
+Framework modulare per configurare e mantenere PS5 Linux, con il controller termico `ps5-fan` come modulo compatibile. Il progetto è stato estratto da `ps5-cachy-os-patch` alla revisione `aa555bacfb343ddae02e32784dc4e46d964c6e32`; il repository originale non viene modificato.
 
 ## Stato
 
@@ -21,6 +21,17 @@ Se il device `target_temp` non esiste, contiene un valore invalido o non è legg
 - Low/Balanced/High definiscono anche isteresi, slew-step e cooldown.
 
 ## Installazione
+
+Il nuovo orchestratore scopre i moduli tramite manifest sotto `modules/<id>/`:
+
+```bash
+sudo ./bin/ps5-cachyos-tools list
+sudo ./bin/ps5-cachyos-tools install --root /mnt/ps5-root --module fan
+sudo ./bin/ps5-cachyos-tools install --root /mnt/ps5-root --dry-run
+sudo ./bin/ps5-cachyos-tools install --live --module fan
+```
+
+`--root` richiede una rootfs già montata, diversa da `/`; in modalità offline il runner e le unit vengono copiati soltanto nel target e nessun hook di boot viene eseguito sul PC. `--live` è esplicito e opera sulla root avviata. Il contratto dei manifest e degli hook è descritto in [docs/module-api.md](docs/module-api.md); l'architettura è in [docs/architecture.md](docs/architecture.md).
 
 Il modulo `lib/modules/fan.sh` può essere chiamato da un orchestratore oppure direttamente:
 

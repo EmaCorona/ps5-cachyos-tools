@@ -1,0 +1,12 @@
+[Unit]
+Description=PS5 CachyOS Tools early module tasks
+After=local-fs.target
+Before=basic.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/ps5-cachyos-tools/boot-runner early
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target
