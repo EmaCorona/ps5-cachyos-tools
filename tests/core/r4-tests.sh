@@ -217,6 +217,22 @@ else
     no 'rollback ha cancellato la sentinella tramite traversal ..'
 fi
 
+remove_hook_root="$tmp/remove-hook-root"; remove_hook_outside="$tmp/remove-hook-outside"
+mkdir -p "$remove_hook_root/etc" "$remove_hook_outside"; printf 'ID=linux\nNAME=r4\n' > "$remove_hook_root/etc/os-release"; printf sentinel > "$remove_hook_outside/fan.state"
+if "$repo/bin/ps5-cachyos-tools" install --root "$remove_hook_root" --module fan >/dev/null 2>&1; then
+    printf '#!/usr/bin/env bash\nrm -rf -- "$1/var/lib/ps5-cachyos-tools/state/modules"\nln -s -- "%s" "$1/var/lib/ps5-cachyos-tools/state/modules"\n' "$remove_hook_outside" > "$remove_hook_root/usr/lib/ps5-cachyos-tools/modules/fan/remove.sh"
+    chmod 0755 "$remove_hook_root/usr/lib/ps5-cachyos-tools/modules/fan/remove.sh"
+    if "$remove_hook_root/usr/local/bin/ps5-cachyos-tools" remove fan --root "$remove_hook_root" --keep-config >/dev/null 2>&1; then
+        no 'remove post-hook accetta state/modules symlinkato'
+    elif [ "$(cat "$remove_hook_outside/fan.state")" = sentinel ]; then
+        ok 'remove post-hook rifiuta state/modules symlinkato senza cancellare fuori root'
+    else
+        no 'remove post-hook ha cancellato stato esterno tramite state/modules symlinkato'
+    fi
+else
+    no 'fixture remove post-hook non installabile'
+fi
+
 state_escape_root="$tmp/state-escape-root"; state_outside="$tmp/state-outside"
 mkdir -p "$state_escape_root" "$state_outside"; ln -s "$state_outside" "$state_escape_root/var"
 if core_state_write "$state_escape_root" fan SUCCESS always 1 0 state-escape >/dev/null 2>&1; then
