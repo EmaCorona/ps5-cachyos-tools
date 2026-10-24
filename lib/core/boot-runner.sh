@@ -19,14 +19,14 @@ runner_request_exists() {
     [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
     core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/reapply || return 1
     exec {fd}<"$dir" || return 1; expected=$(realpath -e -- "$dir") || { exec {fd}<&-; return 1; }; actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }; [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
-    [ ! -L "/proc/self/fd/$fd/$id.request" ] && [ -f "/proc/self/fd/$fd/$id.request" ] && result=0
+    ! readlink -- "/proc/self/fd/$fd/$id.request" >/dev/null 2>&1 && [ -f "/proc/self/fd/$fd/$id.request" ] && result=0
     exec {fd}<&-; return "$result"
 }
 runner_remove_request() {
     local root=$1 id=$2 dir fd expected actual file; dir="$root/var/lib/ps5-cachyos-tools/state/reapply"
     [ -d "$dir" ] && [ ! -L "$dir" ] || return 1; core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/reapply || return 1
     exec {fd}<"$dir" || return 1; expected=$(realpath -e -- "$dir") || { exec {fd}<&-; return 1; }; actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }; [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
-    file="/proc/self/fd/$fd/$id.request"; [ ! -L "$file" ] && rm -f -- "$file"; local rc=$?; exec {fd}<&-; return "$rc"
+    file="/proc/self/fd/$fd/$id.request"; ! readlink -- "$file" >/dev/null 2>&1 && rm -f -- "$file"; local rc=$?; exec {fd}<&-; return "$rc"
 }
 runner_execute_hook() {
     local root=$1 id=$2 phase=$3 hook=$4 expected actual hook_fd rc

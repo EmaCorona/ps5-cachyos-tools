@@ -66,6 +66,6 @@ core_state_get_request_field() {
     local root=$1 id=$2 key=$3 dir fd expected actual file; dir="$root/var/lib/ps5-cachyos-tools/state/reapply"
     [ -d "$dir" ] && [ ! -L "$dir" ] || return 1; core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/reapply || return 1
     exec {fd}<"$dir" || return 1; expected=$(realpath -e -- "$dir") || { exec {fd}<&-; return 1; }; actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }; [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
-    file="/proc/self/fd/$fd/$id.request"; [ -f "$file" ] || { exec {fd}<&-; return 1; }; awk -F= -v key="$key" '$1==key{print substr($0,index($0,"=")+1); exit}' "$file" 2>/dev/null; local rc=$?; exec {fd}<&-; return "$rc"
+    file="/proc/self/fd/$fd/$id.request"; ! readlink -- "$file" >/dev/null 2>&1 && [ -f "$file" ] || { exec {fd}<&-; return 1; }; awk -F= -v key="$key" '$1==key{print substr($0,index($0,"=")+1); exit}' "$file" 2>/dev/null; local rc=$?; exec {fd}<&-; return "$rc"
 }
 core_state_boot_id() { [ -n "${CORE_BOOT_ID-}" ] && printf '%s\n' "$CORE_BOOT_ID" || cat /proc/sys/kernel/random/boot_id 2>/dev/null || printf 'unknown\n'; }
