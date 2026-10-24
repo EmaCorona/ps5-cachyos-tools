@@ -76,6 +76,19 @@ core_target_path() {
     printf '%s\n' "$full"
 }
 
+core_target_validate_root() {
+    local root=$1 current=/ part
+    [[ "$root" = /* && "$root" != *'..'* && "$root" != *$'\n'* && "$root" != *$'\r'* ]] || return 1
+    [ "$root" = / ] && return 0
+    [ -d "$root" ] && [ ! -L "$root" ] || return 1
+    IFS=/ read -ra parts <<< "${root#/}"
+    for part in "${parts[@]}"; do
+        [ -n "$part" ] || continue
+        current="${current%/}/$part"
+        [ ! -L "$current" ] || { core_die "antenato root symlink: $current"; return 1; }
+    done
+}
+
 core_target_prepare_dir() {
     local root=$1 path=$2 full
     full=$(core_target_path "$root" "$path" 0) || return 1
@@ -89,7 +102,7 @@ core_target_prepare_dir() {
 core_target_assert_parents() {
     local root=$1 path=$2 part current resolved target_path
     [[ "$path" = /* && "$path" != *'..'* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] || return 1
-    [ "$root" = / ] || { [ -d "$root" ] && [ ! -L "$root" ] || return 1; }
+    core_target_validate_root "$root" || return 1
     current=${root%/}
     [ -n "$current" ] || current=/
     target_path="$root$path"; [ "$root" = / ] && target_path="$path"

@@ -22,6 +22,15 @@ module_fan_all_paths() { module_fan_manifest_text; printf '%s\n' /etc/ps5-fan/.p
 
 module_fan_validate_write_path() {
     local root=$1 path=$2 full=$1$2 part current target
+    [[ "$path" = /* && "$path" != *'..'* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] || return 1
+    [ "$root" = / ] || { [ -d "$root" ] && [ ! -L "$root" ] || return 1; }
+    local root_current=/ root_part
+    IFS=/ read -ra root_parts_check <<< "${root#/}"
+    for root_part in "${root_parts_check[@]}"; do
+        [ -n "$root_part" ] || continue
+        root_current="${root_current%/}/$root_part"
+        [ ! -L "$root_current" ] || return 1
+    done
     current=${root%/}; [ -n "$current" ] || current=/; target="$full"
     [ "$root" = / ] && target="$path"
     IFS=/ read -ra parts <<< "${path#/}"
@@ -155,23 +164,29 @@ module_fan_restore_service() {
 }
 
 module_fan_runtime_changed() {
-    local root=$1 repo_dir=$2 path source full mode expected_mode
+    local root=$1 repo_dir=$2 path source full mode expected_mode runtime_file runtime_path
+    runtime_file=${CORE_RUNTIME_CHANGED_FILE:-}
+    if [ -n "$runtime_file" ]; then
+        if [ "$root" = / ]; then runtime_path=$runtime_file; else case "$runtime_file" in "$root"/*) runtime_path=/${runtime_file#"$root"};; *) return 1;; esac; fi
+        module_fan_validate_write_path "$root" "$runtime_path" || return 1
+    fi
+    module_fan_mark_runtime_changed() { [ -z "$runtime_file" ] || { module_fan_validate_write_path "$root" "$runtime_path" || return 1; printf '1\n' > "$runtime_file"; }; }
     for path in /usr/lib/ps5-cachyos-tools/fan.sh /usr/local/bin/ps5-fan /usr/local/bin/ps5-fan-daemon /usr/local/bin/ps5-temp /etc/systemd/system/ps5-fan-daemon.service /etc/udev/rules.d/99-ps5-fan.rules; do
         case "$path" in /usr/lib/ps5-cachyos-tools/fan.sh) source="$repo_dir/lib/modules/fan.sh";; /usr/local/bin/*) source="$repo_dir/bin/${path##*/}";; /etc/systemd/system/*) source="$repo_dir/systemd/${path##*/}";; /etc/udev/*) source="$repo_dir/systemd/${path##*/}";; esac
         full=$root$path; expected_mode=644; [[ "$path" == /usr/lib/* || "$path" == /usr/local/bin/* ]] && expected_mode=755
         if ! [ -f "$full" ] || [ -L "$full" ] || ! cmp -s "$source" "$full"; then
-            [ -z "${CORE_RUNTIME_CHANGED_FILE:-}" ] || printf '1\n' > "$CORE_RUNTIME_CHANGED_FILE"
+            module_fan_mark_runtime_changed || return 1
             return 0
         fi
         mode=$(stat -c '%a' "$full" 2>/dev/null) || return 0
         if [ "$mode" != "$expected_mode" ]; then
-            [ -z "${CORE_RUNTIME_CHANGED_FILE:-}" ] || printf '1\n' > "$CORE_RUNTIME_CHANGED_FILE"
+            module_fan_mark_runtime_changed || return 1
             return 0
         fi
     done
     full="$root/etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service"
     if ! [ -L "$full" ] || [ "$(readlink "$full" 2>/dev/null)" != /etc/systemd/system/ps5-fan-daemon.service ]; then
-        [ -z "${CORE_RUNTIME_CHANGED_FILE:-}" ] || printf '1\n' > "$CORE_RUNTIME_CHANGED_FILE"
+        module_fan_mark_runtime_changed || return 1
         return 0
     fi
     return 1
@@ -209,7 +224,7 @@ module_fan_health_timeout() {
 }
 
 module_fan_wait_ready() {
-    local root=$1 timeout=${2:-30} previous_pid=${3:-0} previous_cycles=${4:-0} previous_instance=${5:-} restarted=${6:-0} state=/run/ps5-fan/runtime.state deadline pid cycles updated_at instance_id profile
+    local root=$1 timeout=${2:-30} previous_pid=${3:-0} previous_cycles=${4:-0} previous_instance=${5:-} restarted=${6:-0} state=/run/ps5-fan/runtime.state deadline pid cycles updated_at instance_id profile now
     [ "$root" = / ] || return 0
     command -v systemctl >/dev/null 2>&1 || return 1
     deadline=$(( $(date +%s) + timeout )); state=${PS5_FAN_STATE_FILE:-$state}; cycles=0
@@ -218,7 +233,8 @@ module_fan_wait_ready() {
         pid=$(systemctl show -p MainPID --value ps5-fan-daemon.service 2>/dev/null || true)
         [ "$pid" -gt 0 ] 2>/dev/null && kill -0 "$pid" 2>/dev/null || { sleep 1; continue; }
         cycles=$(awk -F= '$1=="cycles"{print $2}' "$state" 2>/dev/null || true); updated_at=$(awk -F= '$1=="updated_at"{print $2}' "$state" 2>/dev/null || true); instance_id=$(awk -F= '$1=="instance_id"{print $2}' "$state" 2>/dev/null || true)
-        if [ -r "$state" ] && [ "$cycles" -ge 1 ] 2>/dev/null && [ "$updated_at" -ge 0 ] 2>/dev/null && [ -n "$instance_id" ] && [ "$instance_id" != none ] && grep -Eq '^state=(NORMAL|HEATING|EMERGENCY|DEGRADED)$' "$state" && grep -Eq '^profile_applied=(low|balanced|high)$' "$state"; then
+        now=$(date +%s)
+        if [ -r "$state" ] && [ "$cycles" -ge 1 ] 2>/dev/null && [ "$updated_at" -ge "$((now - 300))" ] 2>/dev/null && [ -n "$instance_id" ] && [ "$instance_id" != none ] && grep -Eq '^state=(NORMAL|HEATING|EMERGENCY|DEGRADED)$' "$state" && grep -Eq '^profile_applied=(low|balanced|high)$' "$state"; then
             if [ "$restarted" -eq 1 ]; then [ "$previous_pid" -eq 0 ] || [ "$pid" -ne "$previous_pid" ] || { sleep 1; continue; }; [ -z "$previous_instance" ] || [ "$instance_id" != "$previous_instance" ] || { sleep 1; continue; }; else [ "$previous_pid" -eq 0 ] || [ "$pid" -eq "$previous_pid" ] || { sleep 1; continue; }; [ -z "$previous_instance" ] || [ "$instance_id" = "$previous_instance" ] || { sleep 1; continue; }; [ "$cycles" -gt "$previous_cycles" ] 2>/dev/null || { sleep 1; continue; }; fi
             grep -q '^state=DEGRADED$' "$state" && return 2
             return 0

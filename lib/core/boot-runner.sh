@@ -36,6 +36,7 @@ runner_module() {
     enabled=$(core_registry_field "$id" 1); type=$(core_registry_field "$id" 2); policy=$(core_registry_field "$id" 3); boot_phase=$(core_registry_field "$id" 4); rev=$(core_registry_field "$id" 5); deps=$(core_registry_field "$id" 6); unit=$(core_registry_field "$id" 7); failure=$(core_registry_field "$id" 8)
     [ -z "$CORE_REAPPLY_ID" ] || [ "$CORE_REAPPLY_ID" = "$id" ] || return 0
     request_file="$CORE_STATE_ROOT/var/lib/ps5-cachyos-tools/state/reapply/$id.request"
+    core_state_validate_path "$CORE_STATE_ROOT" "/var/lib/ps5-cachyos-tools/state/reapply/$id.request" || return 1
     [ -n "$CORE_REAPPLY_ID" ] || [ -f "$request_file" ] || true
     [ -n "$CORE_REAPPLY_ID" ] || [ ! -f "$request_file" ] || request=1
     [ "$enabled" = true ] || { core_state_write "$CORE_STATE_ROOT" "$id" SKIPPED_DISABLED "$policy" "$rev" 0 "$(core_state_boot_id)"; return 0; }
@@ -53,6 +54,7 @@ runner_module() {
        [ "$(core_state_get "$CORE_STATE_ROOT" status "$id")" = SUCCESS ] &&
        [ "$(core_state_get "$CORE_STATE_ROOT" completed_revision "$id")" = "$rev" ] &&
        [ "$(core_state_get "$CORE_STATE_ROOT" reapply_applied_id "$id")" = "$request_id" ]; then
+        core_state_validate_path "$CORE_STATE_ROOT" "/var/lib/ps5-cachyos-tools/state/reapply/$id.request" || return 1
         rm -f -- "$request_file" || return 1
         core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot" || return 1
         return 0
@@ -61,6 +63,7 @@ runner_module() {
        [ "$(core_state_get "$CORE_STATE_ROOT" revision "$id")" = "$rev" ] &&
        [ -n "$request_id" ] && [ "$(core_state_get "$CORE_STATE_ROOT" reapply_applied_id "$id")" = "$request_id" ]; then
             core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot" || return 1
+            core_state_validate_path "$CORE_STATE_ROOT" "/var/lib/ps5-cachyos-tools/state/reapply/$id.request" || return 1
             rm -f -- "$request_file" || return 1
             core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot" || return 1
             return 0
@@ -95,7 +98,7 @@ runner_module() {
         fi
         core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot" || return 1
         if [ "$request" -eq 1 ]; then
-            if rm -f -- "$request_file"; then
+            if core_state_validate_path "$CORE_STATE_ROOT" "/var/lib/ps5-cachyos-tools/state/reapply/$id.request" && rm -f -- "$request_file"; then
                 core_state_write "$CORE_STATE_ROOT" "$id" SUCCESS "$policy" "$rev" 0 "$boot" || { core_log "$id: richiesta consumata ma stato da riconciliare"; printf 'id=%s\nphase=%s\nrevision=%s\nrequested_at=%s\n' "$id" "$phase" "$rev" "$(date +%s)" > "$request_file"; return 1; }
             else
                 core_log "$id: impossibile consumare la richiesta di reapply"; return 1

@@ -3,9 +3,21 @@ set -u
 
 core_state_dir() { printf '%s/var/lib/ps5-cachyos-tools/state/modules\n' "$1"; }
 core_state_file() { printf '%s/%s.state\n' "$(core_state_dir "$1")" "$2"; }
+core_state_validate_root() {
+    local root=$1 current=/ part
+    [[ "$root" = /* && "$root" != *'..'* && "$root" != *$'\n'* && "$root" != *$'\r'* ]] || return 1
+    [ "$root" = / ] && return 0
+    [ -d "$root" ] && [ ! -L "$root" ] || return 1
+    IFS=/ read -ra parts <<< "${root#/}"
+    for part in "${parts[@]}"; do
+        [ -n "$part" ] || continue
+        current="${current%/}/$part"
+        [ ! -L "$current" ] || return 1
+    done
+}
 core_state_validate_path() {
     local root=$1 path=$2 current part full
-    [ -d "$root" ] && [ ! -L "$root" ] || return 1
+    core_state_validate_root "$root" || return 1
     [[ "$path" = /* && "$path" != *'..'* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] || return 1
     current=${root%/}; [ -n "$current" ] || current=/; full="$root$path"; [ "$root" = / ] && full="$path"
     IFS=/ read -ra state_parts <<< "${path#/}"
@@ -39,8 +51,10 @@ core_state_write() {
     mv -f -- "$tmp" "$file"
 }
 core_state_get() {
-    local file
-    file=$(core_state_file "$1" "$3")
+    local root=$1 key=$2 id=$3 file
+    core_state_validate_path "$root" /var/lib/ps5-cachyos-tools/state/modules || return 1
+    core_state_validate_path "$root" "/var/lib/ps5-cachyos-tools/state/modules/$id.state" || return 1
+    file=$(core_state_file "$root" "$id")
     [ ! -L "$file" ] && { [ ! -e "$file" ] || [ -f "$file" ]; } || return 1
     [ ! -e "$file" ] && return 0
     [ "$(stat -c '%a' "$file" 2>/dev/null)" = 600 ] || return 1
