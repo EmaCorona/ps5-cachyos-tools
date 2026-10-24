@@ -157,6 +157,8 @@ core_target_parent_fd() {
 
 core_target_remove_path() {
     local root=$1 path=$2 recursive=${3:-0} fd name
+    core_target_validate_final "$root" "$path" "$root$path" || return 1
+    [ -e "$root$path" ] || [ -L "$root$path" ] || return 0
     core_target_parent_fd "$root" "$path" || return 1
     fd=$CORE_TARGET_PARENT_FD; name=$(basename "$path")
     if [ -L "$root$path" ] || [ "$recursive" -ne 1 ]; then rm -f -- "/proc/self/fd/$fd/$name"; else rm -rf -- "/proc/self/fd/$fd/$name"; fi
@@ -182,6 +184,29 @@ core_target_copy_file() {
     rm -f -- "$tmp" || { exec {fd}<&-; return 1; }
     cp -a -- "$source" "$tmp" || { rm -rf -- "$tmp"; exec {fd}<&-; return 1; }
     mv -f -- "$tmp" "/proc/self/fd/$fd/$name"; rc=$?; [ "$rc" -eq 0 ] || rm -f -- "$tmp"; exec {fd}<&-; return "$rc"
+}
+
+core_target_snapshot_file() {
+    local root=$1 path=$2 destination=$3 parent fd name expected actual
+    core_target_validate_final "$root" "$path" "$root$path" || return 1
+    [ -e "$root$path" ] || [ -L "$root$path" ] || return 0
+    parent=$(dirname "$path"); exec {fd}<"$root$parent" || return 1
+    expected=$(realpath -e -- "$root$parent") || { exec {fd}<&-; return 1; }
+    actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }
+    [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
+    name=$(basename "$path"); mkdir -p "$(dirname "$destination")" || { exec {fd}<&-; return 1; }
+    cp -a -- "/proc/self/fd/$fd/$name" "$destination"; local rc=$?; exec {fd}<&-; return "$rc"
+}
+
+core_target_rmdir() {
+    local root=$1 path=$2 parent fd name expected actual rc
+    core_target_validate_final "$root" "$path" "$root$path" || return 1
+    [ -d "$root$path" ] || return 0
+    parent=$(dirname "$path"); exec {fd}<"$root$parent" || return 1
+    expected=$(realpath -e -- "$root$parent") || { exec {fd}<&-; return 1; }
+    actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }
+    [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
+    name=$(basename "$path"); rmdir -- "/proc/self/fd/$fd/$name" 2>/dev/null; rc=$?; exec {fd}<&-; return "$rc"
 }
 
 core_target_chmod() {

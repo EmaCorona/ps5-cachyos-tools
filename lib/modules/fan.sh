@@ -64,6 +64,9 @@ module_fan_remove_path() {
     expected=$(realpath -e -- "$root$parent") || { exec {fd}<&-; return 1; }
     actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }
     [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
+    expected=$(realpath -e -- "$root$parent") || { exec {fd}<&-; return 1; }
+    actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }
+    [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
     name=$(basename "$path")
     if [ -L "$root$path" ] || [ "$recursive" -ne 1 ]; then rm -f -- "/proc/self/fd/$fd/$name"; else rm -rf -- "/proc/self/fd/$fd/$name"; fi
     local rc=$?; exec {fd}<&-; return "$rc"
@@ -84,6 +87,9 @@ module_fan_rmdir_path() {
     local root=$1 path=$2 parent fd name expected actual rc
     module_fan_validate_write_path "$root" "$path" || return 1
     parent=$(dirname "$path"); exec {fd}<"$root$parent" || return 1
+    expected=$(realpath -e -- "$root$parent") || { exec {fd}<&-; return 1; }
+    actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }
+    [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
     expected=$(realpath -e -- "$root$parent") || { exec {fd}<&-; return 1; }
     actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }
     [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }

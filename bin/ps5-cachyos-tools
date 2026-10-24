@@ -54,6 +54,17 @@ core_cli_remove_safe() {
     if [ "$remove_rc" -eq 0 ]; then core_target_remove_path "$root" "/usr/lib/ps5-cachyos-tools/modules/$module" 1 || remove_rc=$?; [ "$remove_rc" -eq 0 ] && core_target_remove_path "$root" "/var/lib/ps5-cachyos-tools/state/modules/$module.state" 1 || remove_rc=$?; fi
     if [ "$remove_rc" -eq 0 ]; then rm -rf -- "$backup"; else core_remove_restore "$root" "$backup" || true; core_service_restore_state "$root" "$module" || true; return "${remove_rc:-1}"; fi
 }
+core_cli_reset_safe() {
+    local root=$1 module=$2 live=$3 state content
+    [[ "$module" =~ ^[a-z0-9][a-z0-9-]*$ ]] || return 2
+    if [ "$live" -eq 1 ]; then root=$(core_target_validate_live) || return 1; else root=$(core_target_validate_offline "$root") || return 1; fi
+    core_target_validate_final "$root" /var/lib/ps5-cachyos-tools/state/modules "$root/var/lib/ps5-cachyos-tools/state/modules" || return 1
+    core_txn_lock "$root" || return 1
+    state="$root/var/lib/ps5-cachyos-tools/state/modules/$module.state"
+    core_target_validate_final "$root" "/var/lib/ps5-cachyos-tools/state/modules/$module.state" "$state" || return 1
+    content=''; [ -f "$state" ] && content=$(cat -- "$state") || true
+    core_target_remove_path "$root" "/var/lib/ps5-cachyos-tools/state/modules/$module.state" || { [ -z "$content" ] || core_target_write_file "$root" "/var/lib/ps5-cachyos-tools/state/modules/$module.state" 600 "$content"; return 1; }
+}
 core_cli_reapply_legacy() {
     local root=$1 module=$2 live=$3 phase
     [ -n "$module" ] || { core_die 'ID modulo richiesto'; return 2; }
@@ -173,6 +184,7 @@ main() {
         core_target_write_reapply_request "$root" "$module" "$phase" "$(core_registry_field "$module" 5)" || return 1
         core_log "reapply pianificato per il prossimo boot: $module"; return 0
     fi
+    if [ "$cmd" = reset ]; then core_cli_reset_safe "$root" "$module" "$live"; return $?; fi
     case "$cmd" in
         list) core_registry_discover "$BASE/modules"; core_registry_validate_dependencies;;
         install) if [ "$live" -eq 1 ]; then [ -z "$root" ] || { core_die '--live e --root sono incompatibili'; return 2; }; root=$(core_target_validate_live) || return 1; else [ -n "$root" ] || { core_die '--root richiesto in modalità offline'; return 2; }; root=$(core_target_validate_offline "$root" "$boot") || return 1; [ -z "$boot" ] || boot=$(core_target_boot_path "$root" "$boot") || { core_die 'partizione boot non valida'; return 1; }; fi; [ "$dry" -eq 0 ] || { core_registry_discover "$BASE/modules" >/dev/null || return 1; CORE_BOOT_TARGET=$boot core_install_preflight "$root" "$BASE" "$module" || return 1; order=$(core_registry_selection_order "$module") || return 1; core_log "dry-run: target=$root module=${module:-all} boot=${boot:-none}"; while IFS= read -r id; do [ -n "$id" ] || continue; core_log "dry-run: selezionato=$id operazione=install preserve-config=true artifacts=$(core_registry_field "$id" 10)"; done <<< "$order"; return 0; }; PS5_TOOLS_NO_START=$no_start CORE_CONFIG_ROOT=$root CORE_BOOT_TARGET=$boot CORE_INSTALL_MODE=$([ "$live" -eq 1 ] && echo live || echo offline) core_install "$root" "$BASE" "$module" || return 1;;

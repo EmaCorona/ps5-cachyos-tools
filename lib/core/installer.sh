@@ -233,7 +233,7 @@ core_txn_snapshot() {
         core_target_validate_final "$root" "$path" "$root$path" || return 1
         if [ -e "$root$path" ] || [ -L "$root$path" ]; then
             mkdir -p "$backup$(dirname "$path")" || return 1
-            cp -a -- "$root$path" "$backup$path" || return 1
+            core_target_snapshot_file "$root" "$path" "$backup$path" || return 1
             printf '%s\n' "$path" >> "$backup/.present" || return 1
         fi
     done < "$backup/.paths"
@@ -247,7 +247,7 @@ core_txn_restore() {
         core_target_remove_path "$root" "$path" 1 || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-paths"; }
         if grep -Fxq "$path" "$backup/.present" 2>/dev/null; then
             core_target_assert_parents "$root" "$path" || { result=1; continue; }
-            mkdir -p "$root$(dirname "$path")" || result=1
+            core_target_prepare_dir "$root" "$(dirname "$path")" >/dev/null || result=1
             core_target_copy_file "$root" "$path" "$backup$path" || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-paths"; }
         fi
     done < "$backup/.paths"
@@ -261,7 +261,7 @@ core_txn_restore() {
         while IFS= read -r dir; do
             [ -n "$dir" ] || continue
             if core_target_validate_final "$root" "$dir" "$root$dir"; then
-                rmdir -- "$root$dir" 2>/dev/null || { [ ! -e "$root$dir" ] || result=1; }
+                core_target_rmdir "$root" "$dir" || { [ ! -e "$root$dir" ] || result=1; }
             else
                 result=1
                 printf '%s\n' "$dir" >> "$backup/.rollback-failed-paths"
@@ -343,7 +343,7 @@ core_remove_module_artifacts() {
         full="$root$path"
         [ -e "$full" ] || [ -L "$full" ] || continue
         core_target_validate_final "$root" "$path" "$full" || return 1
-        rm -f -- "$full" || return 1
+        core_target_remove_path "$root" "$path" || return 1
     done
     request="$root/var/lib/ps5-cachyos-tools/state/reapply/$id.request"
     core_target_validate_final "$root" "/var/lib/ps5-cachyos-tools/state/reapply/$id.request" "$request" || return 1
@@ -360,7 +360,7 @@ core_remove_snapshot() {
         core_target_validate_final "$root" "$path" "$full" || return 1
         if [ -e "$full" ] || [ -L "$full" ]; then
             mkdir -p "$backup$(dirname "$path")" || return 1
-            cp -a -- "$full" "$backup$path" || return 1
+            core_target_snapshot_file "$root" "$path" "$backup$path" || return 1
             printf '%s\n' "$path" >> "$backup/.present" || return 1
         fi
     done
@@ -371,7 +371,7 @@ core_remove_snapshot() {
         core_target_validate_final "$root" "$path" "$full" || return 1
         if [ -e "$full" ] || [ -L "$full" ]; then
             mkdir -p "$backup$(dirname "$path")" || return 1
-            cp -a -- "$full" "$backup$path" || return 1
+            core_target_snapshot_file "$root" "$path" "$backup$path" || return 1
             printf '%s\n' "$path" >> "$backup/.present" || return 1
         fi
     done
@@ -385,7 +385,7 @@ core_remove_restore() {
         rm -rf -- "$root$path" || result=1
         if grep -Fxq "$path" "$backup/.present" 2>/dev/null; then
             core_target_assert_parents "$root" "$path" || { result=1; continue; }
-            mkdir -p "$root$(dirname "$path")" || result=1
+            core_target_prepare_dir "$root" "$(dirname "$path")" >/dev/null || result=1
             cp -a -- "$backup$path" "$root$path" || result=1
         fi
     done < "$backup/.paths"
