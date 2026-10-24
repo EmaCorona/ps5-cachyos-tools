@@ -14,6 +14,51 @@ core_service_snapshot_state() {
     systemctl is-active --quiet "$unit" && CORE_SERVICE_WAS_ACTIVE=1 || true
 }
 
+core_service_transaction_snapshot() {
+    local root=$1 requested=${2-} backup=$3 order id type unit enabled active present
+    : > "$backup/.services" || return 1
+    [ "$root" = / ] || return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+    order=$(core_registry_selection_order "$requested") || return 1
+    for unit in ps5-tools-early.service ps5-tools-boot.service; do
+        enabled=0; active=0
+        systemctl is-enabled --quiet "$unit" && enabled=1 || true
+        systemctl is-active --quiet "$unit" && active=1 || true
+        printf '%s|%s|%s|%s\n' "$unit" "$enabled" "$active" "$(systemctl cat "$unit" >/dev/null 2>&1 && echo 1 || echo 0)" >> "$backup/.services" || return 1
+    done
+    while IFS= read -r id; do
+        [ -n "$id" ] || continue
+        type=$(core_registry_field "$id" 2); [ "$type" = service ] || continue
+        unit=$(core_registry_field "$id" 7); [ -n "$unit" ] || continue
+        enabled=0; active=0; present=0
+        systemctl is-enabled --quiet "$unit" && enabled=1 || true
+        systemctl is-active --quiet "$unit" && active=1 || true
+        systemctl cat "$unit" >/dev/null 2>&1 && present=1 || true
+        grep -Fq "^$unit|" "$backup/.services" || printf '%s|%s|%s|%s\n' "$unit" "$enabled" "$active" "$present" >> "$backup/.services" || return 1
+    done <<< "$order"
+}
+
+core_service_transaction_restore() {
+    local root=$1 backup=$2 unit enabled active present result=0
+    [ "$root" = / ] || return 0
+    [ -f "$backup/.services" ] || return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+    systemctl daemon-reload || result=1
+    while IFS='|' read -r unit enabled active present; do
+        [ -n "$unit" ] || continue
+        if [ "$present" != 1 ]; then
+            systemctl stop "$unit" >/dev/null 2>&1 || true
+            systemctl disable "$unit" >/dev/null 2>&1 || true
+            systemctl is-active --quiet "$unit" && result=1 || true
+            systemctl is-enabled --quiet "$unit" && result=1 || true
+            continue
+        fi
+        if [ "$enabled" = 1 ]; then systemctl enable "$unit" || result=1; else systemctl disable "$unit" || result=1; fi
+        if [ "$active" = 1 ]; then systemctl start "$unit" || result=1; else systemctl stop "$unit" || result=1; fi
+    done < "$backup/.services"
+    return "$result"
+}
+
 core_service_stop() {
     local root=$1 id=$2 unit
     [ "$root" = / ] || return 0
@@ -40,11 +85,12 @@ core_service_reapply() {
     [ "$root" = / ] || return 1
     unit=$(core_registry_field "$id" 7); [ -n "$unit" ] || return 1
     policy=$(core_registry_field "$id" 3); revision=$(core_registry_field "$id" 5); boot=$(core_state_boot_id)
+    if declare -F core_txn_lock >/dev/null 2>&1; then core_txn_lock "$run_root" || return 1; fi
     mkdir -p "$run_root/run/ps5-cachyos-tools" || return 1
     exec 9>"$run_root/run/ps5-cachyos-tools/reapply.lock"
     flock -n 9 || { core_log "reapply già attivo: $id"; return 1; }
     for dep in $(core_registry_field "$id" 6); do
-        [ "$(core_registry_field "$dep" 1)" = true ] || { core_state_write / "$id" BLOCKED_DEPENDENCY "$policy" "$revision" 66 "$boot"; return 1; }
+        [ "$(core_registry_field "$dep" 1)" = true ] || { core_state_write "$state_root" "$id" BLOCKED_DEPENDENCY "$policy" "$revision" 66 "$boot"; return 1; }
         dep_type=$(core_registry_field "$dep" 2)
         if [ "$dep_type" = service ]; then
             systemctl is-active --quiet "$(core_registry_field "$dep" 7)" || { core_state_write "$state_root" "$id" BLOCKED_DEPENDENCY "$policy" "$revision" 66 "$boot"; return 1; }
@@ -104,7 +150,7 @@ core_service_enable_link() {
 }
 
 core_service_module_install() {
-    local root=$1 repo=$2 id=$3 unit source target wants
+    local root=$1 repo=$2 id=$3 unit source target wants enabled
     unit=$(core_registry_field "$id" 7); [ -n "$unit" ] || return 0
     source=$(core_service_source "$repo" "$unit") || return 1
     core_target_assert_parents "$root" "/etc/systemd/system/$unit" || return 1
@@ -115,6 +161,8 @@ core_service_module_install() {
         grep -Eq "(^|[[:space:]])/etc/systemd/system/$unit([[:space:]]|$)" "$manifest" && managed=1
     done
     core_service_install_file "$source" "$target" 644 "$managed" || return 1
+    enabled=$(core_registry_field "$id" 1)
+    [ "$enabled" = true ] || return 0
     core_target_assert_parents "$root" "/etc/systemd/system/multi-user.target.wants" || return 1
     wants="$root/etc/systemd/system/multi-user.target.wants/$unit"
     core_service_enable_link "$wants" "/etc/systemd/system/$unit" || return 1

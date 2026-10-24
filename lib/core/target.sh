@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -u
 
+core_target_is_within_root() {
+    local root=$1 path=$2
+    [ "$root" = / ] && { [[ "$path" = /* ]] || return 1; return 0; }
+    case "$path" in "$root"|"$root"/*) return 0;; *) return 1;; esac
+}
+
 core_target_realpath() {
     local path=$1 resolved current part
     [ -d "$path" ] || { core_die "target non trovato: $path"; return 1; }
@@ -63,8 +69,8 @@ core_target_path() {
     [[ "$path" = /* && "$path" != *'..'* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] || return 1
     core_target_assert_parents "$root" "$path" || return 1
     parent=$(dirname "$root$path"); resolved=$(realpath -m -- "$parent" 2>/dev/null) || return 1
-    case "$resolved/" in "$root/"*|"$root") ;; *) return 1;; esac
-    full="$root$path"
+    core_target_is_within_root "$root" "$resolved" || return 1
+    if [ "$root" = / ]; then full="$path"; else full="$root$path"; fi
     if [ -L "$full" ] && [ "$allow_final" != 1 ]; then return 1; fi
     printf '%s\n' "$full"
 }
@@ -80,20 +86,25 @@ core_target_prepare_dir() {
 }
 
 core_target_assert_parents() {
-    local root=$1 path=$2 part current
+    local root=$1 path=$2 part current resolved
     [[ "$path" = /* ]] || return 1
-    current=$root
+    current=${root%/}
     IFS=/ read -ra parts <<< "${path#/}"
     for part in "${parts[@]}"; do
         [ -n "$part" ] || continue
         current="$current/$part"
         [ "$current" = "$root$path" ] && break
-        [ ! -L "$current" ] || { core_die "symlink nell'antenato target: $current"; return 1; }
+        if [ -L "$current" ]; then
+            [ "$root" = / ] || { core_die "symlink nell'antenato target: $current"; return 1; }
+            resolved=$(realpath -m -- "$current") || return 1
+            core_target_is_within_root / "$resolved" || { core_die "symlink live fuori root: $current"; return 1; }
+        fi
     done
 }
 
 core_target_validate_final() {
     local root=$1 path=$2 full=$3 link target resolved
+    [ "$root" = / ] && full="$path"
     core_target_assert_parents "$root" "$path" || return 1
     if [ -L "$full" ]; then
         link=$(readlink -- "$full") || return 1
@@ -102,7 +113,7 @@ core_target_validate_final() {
             *) target="$(dirname "$full")/$link";;
         esac
         resolved=$(realpath -m -- "$target") || return 1
-        case "$resolved/" in "$root/"*|"$root") ;; *) core_die "symlink gestito fuori target: $path -> $link"; return 1;; esac
+        core_target_is_within_root "$root" "$resolved" || { core_die "symlink gestito fuori target: $path -> $link"; return 1; }
     elif [ -e "$full" ]; then
         [ -f "$full" ] || [ -d "$full" ] || return 1
     fi

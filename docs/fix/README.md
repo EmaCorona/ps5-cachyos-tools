@@ -1,5 +1,7 @@
 # Registro fix
 
+- 2026-10-24 — [hardening MOD-READY del framework modulare](fix-modular-final-hardening-v2.md): root live, dipendenze selettive, stato once/always, service, rollback, lock condiviso, CLI e regressioni concorrenti.
+
 - 2026-10-24 — [hardening finale del framework modulare](fix-modular-final-hardening.md): symlink gestiti, ownership dei manifest, reapply offline/live, installazioni idempotenti, mount separati e modularità selettiva.
 
 - 2026-10-24 — [preflight installazione modulare](fix-modular-preflight.md): dipendenze, hook obbligatori, boot target e rollback live.

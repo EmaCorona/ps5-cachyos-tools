@@ -22,6 +22,7 @@ core_registry_order() {
 
 core_registry_selection_order() {
     local requested=${1-} id dep
+    local -a ordered=()
     [ -z "$requested" ] && { core_registry_order; return; }
     declare -A selected=()
     core_registry_select_recursive() {
@@ -31,5 +32,9 @@ core_registry_selection_order() {
         for dependency in $(core_registry_field "$current" 6); do core_registry_select_recursive "$dependency" || return 1; done
     }
     core_registry_select_recursive "$requested" || return 1
-    core_registry_order | while IFS= read -r id; do [ -n "${selected[$id]+x}" ] && printf '%s\n' "$id"; done
+    mapfile -t ordered < <(core_registry_order) || return 1
+    for id in "${ordered[@]}"; do
+        [ -n "${selected[$id]+x}" ] || continue
+        printf '%s\n' "$id"
+    done
 }
