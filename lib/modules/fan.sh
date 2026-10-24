@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -u
 
+module_fan_install_copy() {
+    local source=$1 target=$2 mode=$3
+    if [ -f "$target" ] && cmp -s -- "$source" "$target"; then chmod "$mode" -- "$target"; return; fi
+    [ ! -L "$target" ] || return 1
+    install -m "$mode" -- "$source" "$target"
+}
+
 module_fan_info() { echo "PS5 fan controller: 15 zones, Low/Balanced/High, fail-safe target_temp"; }
 module_fan_owned_path() { case "$1" in /usr/lib/ps5-cachyos-tools/fan.sh|/usr/local/bin/ps5-fan|/usr/local/bin/ps5-fan-daemon|/usr/local/bin/ps5-temp|/etc/systemd/system/ps5-fan-daemon.service|/etc/udev/rules.d/99-ps5-fan.rules|/etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service) return 0;; *) return 1;; esac; }
 module_fan_manifest_path() { echo "$1/etc/ps5-fan/.ps5-cachyos-tools.manifest"; }
@@ -216,12 +223,12 @@ module_fan_run() {
         return 1
     }
     install -d "$root/usr/lib/ps5-cachyos-tools" "$root/usr/local/bin" "$root/etc/ps5-fan/profiles" "$root/etc/systemd/system" "$root/etc/udev/rules.d" || { module_fan_fail; return 1; }
-    install -m 0755 "$repo_dir/lib/modules/fan.sh" "$root/usr/lib/ps5-cachyos-tools/fan.sh" || { module_fan_fail; return 1; }
-    install -m 0755 "$repo_dir/bin/ps5-fan" "$root/usr/local/bin/ps5-fan" || { module_fan_fail; return 1; }; install -m 0755 "$repo_dir/bin/ps5-fan-daemon" "$root/usr/local/bin/ps5-fan-daemon" || { module_fan_fail; return 1; }; install -m 0755 "$repo_dir/bin/ps5-temp" "$root/usr/local/bin/ps5-temp" || { module_fan_fail; return 1; }
-    [ -e "$root/etc/ps5-fan/fan.conf" ] || install -m 0644 "$repo_dir/config/fan.conf" "$root/etc/ps5-fan/fan.conf" || { module_fan_fail; return 1; }
-    for profile in "$repo_dir"/config/profiles/*.conf; do [ -e "$root/etc/ps5-fan/profiles/$(basename "$profile")" ] || install -m 0644 "$profile" "$root/etc/ps5-fan/profiles/" || { module_fan_fail; return 1; }; done
-    install -m 0644 "$repo_dir/systemd/ps5-fan-daemon.service" "$root/etc/systemd/system/ps5-fan-daemon.service" || { module_fan_fail; return 1; }; install -m 0644 "$repo_dir/systemd/99-ps5-fan.rules" "$root/etc/udev/rules.d/99-ps5-fan.rules" || { module_fan_fail; return 1; }
-    mkdir -p "$root/etc/systemd/system/multi-user.target.wants" || { module_fan_fail; return 1; }; ln -sfn /etc/systemd/system/ps5-fan-daemon.service "$root/etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service" || { module_fan_fail; return 1; }
+    module_fan_install_copy "$repo_dir/lib/modules/fan.sh" "$root/usr/lib/ps5-cachyos-tools/fan.sh" 755 || { module_fan_fail; return 1; }
+    module_fan_install_copy "$repo_dir/bin/ps5-fan" "$root/usr/local/bin/ps5-fan" 755 || { module_fan_fail; return 1; }; module_fan_install_copy "$repo_dir/bin/ps5-fan-daemon" "$root/usr/local/bin/ps5-fan-daemon" 755 || { module_fan_fail; return 1; }; module_fan_install_copy "$repo_dir/bin/ps5-temp" "$root/usr/local/bin/ps5-temp" 755 || { module_fan_fail; return 1; }
+    [ -e "$root/etc/ps5-fan/fan.conf" ] || module_fan_install_copy "$repo_dir/config/fan.conf" "$root/etc/ps5-fan/fan.conf" 644 || { module_fan_fail; return 1; }
+    for profile in "$repo_dir"/config/profiles/*.conf; do [ -e "$root/etc/ps5-fan/profiles/$(basename "$profile")" ] || module_fan_install_copy "$profile" "$root/etc/ps5-fan/profiles/$(basename "$profile")" 644 || { module_fan_fail; return 1; }; done
+    module_fan_install_copy "$repo_dir/systemd/ps5-fan-daemon.service" "$root/etc/systemd/system/ps5-fan-daemon.service" 644 || { module_fan_fail; return 1; }; module_fan_install_copy "$repo_dir/systemd/99-ps5-fan.rules" "$root/etc/udev/rules.d/99-ps5-fan.rules" 644 || { module_fan_fail; return 1; }
+    mkdir -p "$root/etc/systemd/system/multi-user.target.wants" || { module_fan_fail; return 1; }; if [ -L "$root/etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service" ]; then [ "$(readlink "$root/etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service")" = /etc/systemd/system/ps5-fan-daemon.service ] || { module_fan_fail; return 1; }; else [ ! -e "$root/etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service" ] && ln -s -- /etc/systemd/system/ps5-fan-daemon.service "$root/etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service" || { module_fan_fail; return 1; }; fi
     [ -f "$root/etc/ps5-fan/state" ] || printf '%s\n' balanced > "$root/etc/ps5-fan/state" || { module_fan_fail; return 1; }; module_fan_manifest_text > "$root/etc/ps5-fan/.ps5-cachyos-tools.manifest" && chmod 0644 "$root/etc/ps5-fan/.ps5-cachyos-tools.manifest" || { module_fan_fail; return 1; }
     if [ "$root" = / ] && [ "${PS5_TOOLS_NO_START:-0}" -eq 0 ] && command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload || { module_fan_fail; return 1; }; if [ "$active_before" -eq 1 ]; then [ "$runtime_changed" -eq 0 ] || systemctl restart ps5-fan-daemon.service || { module_fan_fail; return 1; }; systemctl is-active --quiet ps5-fan-daemon.service || { module_fan_fail; return 1; }; elif [ "$enabled_before" -eq 1 ]; then systemctl enable ps5-fan-daemon.service || { module_fan_fail; return 1; }; else systemctl enable --now ps5-fan-daemon.service || { module_fan_fail; return 1; }; fi; if [ "$active_before" -eq 0 ] && [ "$enabled_before" -eq 1 ]; then echo "fan: servizio lasciato inactive/enabled come nello stato iniziale" >&2; else health_pid=$active_pid; [ "$active_before" -eq 1 ] && [ "$runtime_changed" -eq 0 ] && health_pid=0; [ "$active_before" -eq 1 ] && [ "$runtime_changed" -ne 0 ] && restart_required=1; [ "$active_before" -eq 0 ] && [ "$enabled_before" -eq 0 ] && restart_required=1; health_timeout=$(module_fan_health_timeout /) || { module_fan_fail; return 1; }; module_fan_wait_ready / "$health_timeout" "$health_pid" "$health_cycles" "$health_instance" "$restart_required"; health_result=$?; case "$health_result" in 0) echo "fan: servizio aggiornato e health check applicativo verificato" >&2;; 2) echo "fan: servizio attivo ma hardware/stato DEGRADED: regolazione non confermata" >&2;; *) module_fan_fail; return 1;; esac; fi; fi
     [ "$root" != / ] && echo "fan: installazione autonoma completata (health check live da eseguire sul target)" >&2 || true

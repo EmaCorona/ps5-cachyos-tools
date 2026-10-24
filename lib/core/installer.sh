@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -u
 
+core_install_copy() {
+    local source=$1 target=$2 mode=$3
+    [ -f "$source" ] || return 1
+    if [ -f "$target" ] && cmp -s -- "$source" "$target"; then
+        chmod "$mode" -- "$target" || return 1
+        return 0
+    fi
+    [ ! -L "$target" ] || { core_log "target install symlink non autorizzato: $target"; return 1; }
+    install -m "$mode" -- "$source" "$target"
+}
+
 core_install_body() {
     local root=$1 repo=$2 module=${3-} moddir id hook path lock_dir target rc core_src fan_src requires_boot order type
     [ -d "$repo/lib/core" ] && core_src="$repo/lib/core" || core_src="$repo/core"
@@ -22,30 +33,35 @@ core_install_body() {
     chmod 700 "$root/var/lib/ps5-cachyos-tools/state/modules" || return 1
     for file in log.sh target.sh registry.sh dependencies.sh state.sh boot-runner.sh installer.sh service.sh; do
         target=$(core_target_path "$root" "/usr/lib/ps5-cachyos-tools/core/$file") || return 1
-        install -m 0755 "$core_src/$file" "$target" || return 1
+        core_install_copy "$core_src/$file" "$target" 755 || return 1
     done
     target=$(core_target_path "$root" /usr/lib/ps5-cachyos-tools/boot-runner) || return 1
-    install -m 0755 "$core_src/boot-runner.sh" "$target" || return 1
-    target=$(core_target_path "$root" /usr/lib/ps5-cachyos-tools/modules/fan.sh) || return 1
-    install -m 0755 "$fan_src" "$target" || return 1
-    install -m 0755 "$fan_src" "$root/usr/lib/ps5-cachyos-tools/lib/modules/fan.sh" || return 1
-    for path in ps5-fan ps5-fan-daemon ps5-temp; do install -m 0755 "$repo/bin/$path" "$root/usr/lib/ps5-cachyos-tools/bin/$path" || return 1; done
-    install -m 0644 "$repo/config/fan.conf" "$root/usr/lib/ps5-cachyos-tools/config/fan.conf" || return 1
-    for path in "$repo"/config/profiles/*.conf; do [ -f "$path" ] || continue; install -m 0644 "$path" "$root/usr/lib/ps5-cachyos-tools/config/profiles/$(basename "$path")" || return 1; done
+    core_install_copy "$core_src/boot-runner.sh" "$target" 755 || return 1
+    if [ -z "$module" ] || [ "$module" = fan ]; then
+        target=$(core_target_path "$root" /usr/lib/ps5-cachyos-tools/modules/fan.sh) || return 1
+        core_install_copy "$fan_src" "$target" 755 || return 1
+        core_install_copy "$fan_src" "$root/usr/lib/ps5-cachyos-tools/lib/modules/fan.sh" 755 || return 1
+        for path in ps5-fan ps5-fan-daemon ps5-temp; do core_install_copy "$repo/bin/$path" "$root/usr/lib/ps5-cachyos-tools/bin/$path" 755 || return 1; done
+        core_install_copy "$repo/config/fan.conf" "$root/usr/lib/ps5-cachyos-tools/config/fan.conf" 644 || return 1
+        for path in "$repo"/config/profiles/*.conf; do [ -f "$path" ] || continue; core_install_copy "$path" "$root/usr/lib/ps5-cachyos-tools/config/profiles/$(basename "$path")" 644 || return 1; done
+    fi
     target=$(core_target_path "$root" /usr/local/bin/ps5-cachyos-tools) || return 1
-    install -m 0755 "$repo/bin/ps5-cachyos-tools" "$target" || return 1
+    core_install_copy "$repo/bin/ps5-cachyos-tools" "$target" 755 || return 1
     for path in "$repo"/systemd/ps5-tools-*.service; do
         [ -f "$path" ] || continue
-        install -m 0644 "$path" "$root/usr/lib/ps5-cachyos-tools/systemd/$(basename "$path")" || return 1
+        core_install_copy "$path" "$root/usr/lib/ps5-cachyos-tools/systemd/$(basename "$path")" 644 || return 1
     done
-    for path in ps5-fan-daemon.service 99-ps5-fan.rules; do
-        [ -f "$repo/systemd/$path" ] && install -m 0644 "$repo/systemd/$path" "$root/usr/lib/ps5-cachyos-tools/systemd/$path" || return 1
-    done
+    if [ -z "$module" ] || [ "$module" = fan ]; then
+        for path in ps5-fan-daemon.service 99-ps5-fan.rules; do
+            [ -f "$repo/systemd/$path" ] && core_install_copy "$repo/systemd/$path" "$root/usr/lib/ps5-cachyos-tools/systemd/$path" 644 || return 1
+        done
+    fi
     printf '%s\n' "$(date +%s)-$(id -u)-$root" > "$root/var/lib/ps5-cachyos-tools/install.identity"
     core_registry_discover "$repo/modules" >/dev/null || return 1
+    core_registry_validate_owned_paths || return 1
     core_registry_validate_dependencies || return 1
-    order=$(core_registry_order) || return 1
     [ -z "$module" ] || [ "${CORE_MODULE[$module]+x}" = x ] || { core_log "modulo sconosciuto: $module"; return 1; }
+    order=$(core_registry_selection_order "$module") || return 1
     while IFS= read -r id; do [ -n "$id" ] || continue; moddir="$repo/modules/$id"
         [ -d "$moddir" ] || return 1
         [ -z "$module" ] || [ "$module" = "$id" ] || continue
@@ -100,7 +116,7 @@ core_txn_snapshot() {
     sort -u "$backup/.paths" -o "$backup/.paths" || return 1
     while IFS= read -r path; do
         [ -n "$path" ] || continue
-        core_target_assert_parents "$root" "$path" || return 1
+        core_target_validate_final "$root" "$path" "$root$path" || return 1
         if [ -e "$root$path" ] || [ -L "$root$path" ]; then
             mkdir -p "$backup$(dirname "$path")" || return 1
             cp -a -- "$root$path" "$backup$path" || return 1
@@ -113,10 +129,10 @@ core_txn_restore() {
     local root=$1 backup=$2 path result=0
     while IFS= read -r path; do
         [ -n "$path" ] || continue
-        rm -rf -- "$root$path" || result=1
+        rm -rf -- "$root$path" || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-paths"; }
         if grep -Fxq "$path" "$backup/.present" 2>/dev/null; then
             mkdir -p "$root$(dirname "$path")" || result=1
-            cp -a -- "$backup$path" "$root$path" || result=1
+            cp -a -- "$backup$path" "$root$path" || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-paths"; }
         fi
     done < "$backup/.paths"
     return "$result"
@@ -126,8 +142,9 @@ core_install_preflight() {
     local root=$1 repo=$2 module=${3-} id moddir type requires_boot unit order
     core_registry_discover "$repo/modules" >/dev/null || return 1
     core_registry_validate_dependencies || return 1
-    order=$(core_registry_order) || return 1
+    core_registry_validate_owned_paths || return 1
     [ -z "$module" ] || [ "${CORE_MODULE[$module]+x}" = x ] || return 1
+    order=$(core_registry_selection_order "$module") || return 1
     while IFS= read -r id; do
         [ -n "$id" ] || continue; [ -z "$module" ] || [ "$module" = "$id" ] || continue
         moddir="$repo/modules/$id"; [ -d "$moddir" ] || return 1
@@ -141,7 +158,7 @@ core_install_preflight() {
 }
 
 core_install() {
-    local root=$1 backup path was_enabled=0 was_active=0
+    local root=$1 backup path was_enabled=0 was_active=0 rollback_status=ROLLBACK_PARTIAL service_rollback_failed=0
     CORE_CONFIG_ROOT=${CORE_CONFIG_ROOT:-$root}
     core_install_preflight "$root" "$2" "${3-}" || return 1
     if [ "${CORE_INSTALL_MODE:-offline}" = live ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then
@@ -155,12 +172,32 @@ core_install() {
         return 0
     fi
     core_log 'installazione core fallita: rollback transazione'
-    core_txn_restore "$root" "$backup" || core_log 'ROLLBACK_PARTIAL: ripristino artefatti transazione incompleto'
-    if [ "${CORE_INSTALL_MODE:-offline}" = live ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then
-        systemctl daemon-reload 2>/dev/null || true
-        if [ "$was_enabled" -eq 1 ]; then systemctl enable ps5-tools-early.service ps5-tools-boot.service >/dev/null 2>&1 || true; else systemctl disable ps5-tools-early.service ps5-tools-boot.service >/dev/null 2>&1 || true; fi
-        if [ "$was_active" -eq 1 ]; then systemctl start ps5-tools-early.service >/dev/null 2>&1 || true; else systemctl stop ps5-tools-early.service >/dev/null 2>&1 || true; fi
+    if core_txn_restore "$root" "$backup"; then
+        rollback_status=ROLLBACK_COMPLETED
+    else
+        core_log "ROLLBACK_PARTIAL: backup conservato in $backup"
     fi
-    rm -rf -- "$backup"
+    if [ "${CORE_INSTALL_MODE:-offline}" = live ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload 2>/dev/null || service_rollback_failed=1
+        if [ "$was_enabled" -eq 1 ]; then systemctl enable ps5-tools-early.service ps5-tools-boot.service >/dev/null 2>&1 || service_rollback_failed=1; else systemctl disable ps5-tools-early.service ps5-tools-boot.service >/dev/null 2>&1 || service_rollback_failed=1; fi
+        if [ "$was_active" -eq 1 ]; then systemctl start ps5-tools-early.service >/dev/null 2>&1 || service_rollback_failed=1; else systemctl stop ps5-tools-early.service >/dev/null 2>&1 || service_rollback_failed=1; fi
+    fi
+    [ "$service_rollback_failed" -eq 0 ] || rollback_status=ROLLBACK_FILES_RESTORED_SERVICE_FAILED
+    if [ "$rollback_status" = ROLLBACK_COMPLETED ]; then
+        rm -rf -- "$backup"
+    else
+        printf '%s\n' "$rollback_status" > "$backup/.rollback-status"
+        core_log "backup transazione conservato: $backup"
+    fi
     return 1
+}
+
+core_remove_module_artifacts() {
+    local root=$1 id=$2 path full
+    for path in $(core_registry_field "$id" 10); do
+        full="$root$path"
+        [ -e "$full" ] || [ -L "$full" ] || continue
+        core_target_validate_final "$root" "$path" "$full" || return 1
+        rm -f -- "$full" || return 1
+    done
 }

@@ -1,15 +1,51 @@
 #!/usr/bin/env bash
 set -u
 
+core_service_install_file() {
+    local source=$1 target=$2 mode=$3 managed=${4:-0}
+    [ -f "$source" ] || return 1
+    if [ -f "$target" ]; then
+        if cmp -s -- "$source" "$target" && [ "$(stat -c '%a' "$target" 2>/dev/null)" = "$mode" ]; then
+            return 0
+        fi
+        [ "$managed" = 1 ] || { core_log "unit esistente non posseduta: $target"; return 1; }
+    fi
+    [ ! -L "$target" ] || { core_log "target unit è un symlink estraneo: $target"; return 1; }
+    install -m "$mode" -- "$source" "$target"
+}
+
+core_service_enable_link() {
+    local link=$1 target=$2 current
+    if [ -L "$link" ]; then
+        current=$(readlink -- "$link") || return 1
+        [ "$current" = "$target" ] || { core_log "symlink service non coerente: $link"; return 1; }
+        return 0
+    fi
+    [ ! -e "$link" ] || { core_log "conflitto service non symlink: $link"; return 1; }
+    ln -s -- "$target" "$link"
+}
+
 core_service_module_install() {
     local root=$1 repo=$2 id=$3 unit source target wants
     unit=$(core_registry_field "$id" 7); [ -n "$unit" ] || return 0
     source="$repo/systemd/$unit"; [ -f "$source" ] || return 1
-    target=$(core_target_path "$root" "/etc/systemd/system/$unit") || return 1
-    install -m 0644 "$source" "$target" || return 1
+    core_target_assert_parents "$root" "/etc/systemd/system/$unit" || return 1
+    target="$root/etc/systemd/system/$unit"
+    local managed=0 manifest
+    for manifest in "$root"/usr/lib/ps5-cachyos-tools/modules/*/module.conf; do
+        [ -f "$manifest" ] || continue
+        grep -Eq "(^|[[:space:]])/etc/systemd/system/$unit([[:space:]]|$)" "$manifest" && managed=1
+    done
+    core_service_install_file "$source" "$target" 644 "$managed" || return 1
     core_target_assert_parents "$root" "/etc/systemd/system/multi-user.target.wants" || return 1
     wants="$root/etc/systemd/system/multi-user.target.wants/$unit"
-    if [ -L "$wants" ]; then [ "$(readlink "$wants")" = "/etc/systemd/system/$unit" ] || return 1; else [ ! -e "$wants" ] || return 1; ln -s -- "/etc/systemd/system/$unit" "$wants" || return 1; fi
+    core_service_enable_link "$wants" "/etc/systemd/system/$unit" || return 1
+    if [ "${CORE_INSTALL_MODE:-offline}" = live ] && [ "$root" = / ] && [ "${PS5_TOOLS_NO_START:-0}" != 1 ]; then
+        systemctl daemon-reload || return 1
+        systemctl enable "$unit" || return 1
+        systemctl start "$unit" || return 1
+        systemctl is-active --quiet "$unit" || { core_log "health check service fallito: $unit"; return 1; }
+    fi
 }
 
 core_service_module_remove() {
@@ -19,6 +55,7 @@ core_service_module_remove() {
         systemctl disable --now "$unit" || return 1
         systemctl daemon-reload || return 1
     fi
+    [ ! -L "$root/etc/systemd/system/multi-user.target.wants/$unit" ] || [ "$(readlink "$root/etc/systemd/system/multi-user.target.wants/$unit")" = "/etc/systemd/system/$unit" ] || return 1
     rm -f -- "$root/etc/systemd/system/multi-user.target.wants/$unit" "$root/etc/systemd/system/$unit"
 }
 
@@ -28,12 +65,12 @@ core_service_install() {
         core_target_prepare_dir "$root" "$path" >/dev/null || return 1
     done
     for path in /etc/systemd/system/ps5-tools-early.service /etc/systemd/system/ps5-tools-boot.service; do
-        target=$(core_target_path "$root" "$path") || return 1
-        install -m 0644 "$repo/systemd/${path##*/}" "$target" || return 1
+        core_target_assert_parents "$root" "$path" || return 1
+        target="$root$path"
+        core_service_install_file "$repo/systemd/${path##*/}" "$target" 644 1 || return 1
     done
     for path in ps5-tools-early.service ps5-tools-boot.service; do
-        target=$(core_target_path "$root" "/etc/systemd/system/multi-user.target.wants/$path") || return 1
-        [ ! -e "$target" ] || [ -L "$target" ] || return 1
-        ln -s -- "/etc/systemd/system/$path" "$target" || return 1
+        target="$root/etc/systemd/system/multi-user.target.wants/$path"
+        core_service_enable_link "$target" "/etc/systemd/system/$path" || return 1
     done
 }

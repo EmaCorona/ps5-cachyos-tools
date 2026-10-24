@@ -19,3 +19,17 @@ core_registry_order() {
     done
     printf '%s\n' "${result[@]}"
 }
+
+core_registry_selection_order() {
+    local requested=${1-} id dep
+    [ -z "$requested" ] && { core_registry_order; return; }
+    declare -A selected=()
+    core_registry_select_recursive() {
+        local current=$1 dependency
+        [ -z "${selected[$current]+x}" ] || return 0
+        selected[$current]=1
+        for dependency in $(core_registry_field "$current" 6); do core_registry_select_recursive "$dependency" || return 1; done
+    }
+    core_registry_select_recursive "$requested" || return 1
+    core_registry_order | while IFS= read -r id; do [ -n "${selected[$id]+x}" ] && printf '%s\n' "$id"; done
+}

@@ -28,12 +28,15 @@ Il nuovo orchestratore scopre i moduli tramite manifest sotto `modules/<id>/`:
 sudo ./bin/ps5-cachyos-tools list
 sudo ./bin/ps5-cachyos-tools install --root /mnt/ps5-root --module fan
 sudo ./bin/ps5-cachyos-tools install --root /mnt/ps5-root --dry-run
+sudo ./bin/ps5-cachyos-tools install --root /mnt/ps5-root --boot /mnt/ps5-boot --module fan
 sudo ./bin/ps5-cachyos-tools install --live --module fan
 ```
 
 Dopo un'installazione offline o live la CLI generale è disponibile anche come `/usr/local/bin/ps5-cachyos-tools`, quindi il target può essere amministrato senza conservare la checkout Git. `list`, `check`, `status`, `reset`, `reapply` e `remove --module <id>` usano il registry installato; `reapply` è il solo percorso esplicito per rieseguire un task `once` completato.
 
 `--root` richiede una rootfs già montata, diversa da `/`; in modalità offline il runner e le unit vengono copiati soltanto nel target e nessun hook di boot viene eseguito sul PC. `--live` è esplicito e opera sulla root avviata. Il contratto dei manifest e degli hook è descritto in [docs/module-api.md](docs/module-api.md); l'architettura è in [docs/architecture.md](docs/architecture.md).
+
+`--boot` è opzionale e può indicare una partizione boot montata separatamente. Il framework non formatta partizioni e non deduce automaticamente l'associazione da un filesystem: la selezione dei mountpoint resta esplicita.
 
 Il modulo `lib/modules/fan.sh` può essere chiamato da un orchestratore oppure direttamente:
 

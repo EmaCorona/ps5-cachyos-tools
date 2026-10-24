@@ -42,8 +42,38 @@ core_registry_parse_file() {
     for dep in ${data[DEPENDENCIES]-}; do [[ "$dep" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { core_log "dipendenza non valida: $id -> $dep"; return 1; }; done
     if [ -n "${data[SERVICE_UNIT]-}" ]; then [[ "${data[SERVICE_UNIT]}" =~ ^[a-zA-Z0-9_.@-]+\.service$ ]] || return 1; fi
     [ "${data[TYPE]}" != service ] || { [ "${data[RUN_POLICY]}" = always ] && [ -n "${data[SERVICE_UNIT]-}" ] || { core_log "servizio incoerente: $id"; return 1; }; }
-    for path in ${data[OWNED_PATHS]-}; do [[ "$path" = /* && "$path" != *'..'* && "$path" != *$'\n'* ]] || { core_log "OWNED_PATHS non valido: $id"; return 1; }; done
+    for path in ${data[OWNED_PATHS]-}; do
+        [[ "$path" = /* && "$path" != *'..'* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] || { core_log "OWNED_PATHS non valido: $id"; return 1; }
+        case "$path" in
+            /|/etc|/usr|/usr/lib|/usr/local|/var|/var/lib|/run|/etc/systemd|/etc/systemd/system|/var/lib/ps5-cachyos-tools|/run/ps5-cachyos-tools|/usr/lib/ps5-cachyos-tools|/etc/ps5-fan|/usr/local/bin|/etc/udev|/etc/udev/rules.d|*/.ps5-cachyos-tools-txn.*)
+                core_log "OWNED_PATHS pericoloso: $id:$path"; return 1;;
+        esac
+    done
     CORE_MODULE[$id]=$(printf '%s\034' "${data[NAME]}" "${data[ENABLED]}" "${data[TYPE]}" "${data[RUN_POLICY]}" "${data[BOOT_PHASE]-normal}" "${data[REVISION]-1}" "${data[DEPENDENCIES]-}" "${data[SERVICE_UNIT]-}" "${data[FAILURE_POLICY]-continue}" "${data[REQUIRES_BOOT]-false}" "${data[OWNED_PATHS]-}")
+}
+
+core_registry_validate_owned_paths() {
+    local id path other other_path a b
+    declare -A owners=()
+    for id in "${CORE_MODULE_IDS[@]}"; do
+        for path in $(core_registry_field "$id" 10); do
+            [ "$path" != / ] || { core_log "OWNED_PATHS non può essere /"; return 1; }
+            [ -n "$path" ] || { core_log "OWNED_PATHS vuoto: $id"; return 1; }
+            [[ "$path" = /* && "$path" != *'..'* && "$path" != *$'\n'* ]] || return 1
+            case "$path" in
+                /etc|/usr|/usr/lib|/usr/local|/var|/var/lib|/run|/etc/systemd|/etc/systemd/system|/var/lib/ps5-cachyos-tools|/run/ps5-cachyos-tools|/usr/lib/ps5-cachyos-tools|/usr/lib/ps5-cachyos-tools/*/|/etc/ps5-fan|/usr/local/bin|/etc/udev|/etc/udev/rules.d|*/.ps5-cachyos-tools-txn.*) return 1;;
+            esac
+            [ -z "${owners[$path]+x}" ] || { core_log "ownership duplicata: $path"; return 1; }
+            owners[$path]=$id
+        done
+    done
+    for path in "${!owners[@]}"; do
+        for other in "${!owners[@]}"; do
+            [ "$path" = "$other" ] && continue
+            a=${path%/}; b=${other%/}
+            case "$a/" in "$b/"*) core_log "ownership sovrapposta: $a e $b"; return 1;; esac
+        done
+    done
 }
 
 core_registry_discover() {

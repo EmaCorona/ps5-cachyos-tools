@@ -13,6 +13,23 @@ mkdir -p "$tmp/root/etc"
 printf 'ID=linux\nNAME=fixture\n' > "$tmp/root/etc/os-release"
 ./bin/ps5-cachyos-tools install --root "$tmp/root" --dry-run >/tmp/ps5-tools-dry.out 2>&1 && ! test -e "$tmp/root/usr/lib/ps5-cachyos-tools" && ok 'dry-run non scrive la rootfs' || no 'dry-run ha scritto la rootfs'
 ./bin/ps5-cachyos-tools install --root "$tmp/root" --module fan >/tmp/ps5-tools-install.out 2>&1 && test -x "$tmp/root/usr/lib/ps5-cachyos-tools/boot-runner" && test -L "$tmp/root/etc/systemd/system/multi-user.target.wants/ps5-tools-boot.service" && ok 'installazione offline resta nella root target' || no 'installazione offline incompleta'
+./bin/ps5-cachyos-tools install --root "$tmp/root" --module fan >/tmp/ps5-tools-reinstall.out 2>&1 && ok 'reinstallazione idempotente con symlink gestiti' || no 'reinstallazione idempotente fallita'
+mkdir -p "$tmp/boot"
+./bin/ps5-cachyos-tools install --root "$tmp/root" --boot "$tmp/boot" --module fan --dry-run >/tmp/ps5-tools-boot-separate.out 2>&1 && ok 'rootfs e boot su mount separati' || no 'mount boot separato rifiutato'
+mkdir -p "$tmp/bad-modules/bad"
+cat > "$tmp/bad-modules/bad/module.conf" <<'EOF'
+ID=bad
+NAME=Bad
+ENABLED=true
+TYPE=task
+RUN_POLICY=once
+BOOT_PHASE=normal
+REVISION=1
+DEPENDENCIES=
+FAILURE_POLICY=continue
+OWNED_PATHS=/usr
+EOF
+if CORE_CONFIG_ROOT="$tmp/root" core_registry_discover "$tmp/bad-modules" >/dev/null 2>&1 && core_registry_validate_owned_paths >/dev/null 2>&1; then no 'OWNED_PATHS pericoloso accettato'; else ok 'OWNED_PATHS pericoloso rifiutato'; fi
 test -e /etc/systemd/system/ps5-tools-boot.service && no 'offline ha scritto la unit sull host' || ok 'offline non scrive unit sull host'
 ln -s /etc "$tmp/root/etc-link"
 if ./bin/ps5-cachyos-tools install --root "$tmp/root/etc-link" --dry-run >/dev/null 2>&1; then no 'target symlink accettato'; else ok 'target symlink non accettato'; fi
@@ -36,6 +53,8 @@ root=$1
 printf '%s\n' "$(( $(cat "$root/var/lib/ps5-cachyos-tools/example.count" 2>/dev/null || echo 0) + 1 ))" > "$root/var/lib/ps5-cachyos-tools/example.count"
 EOF
 chmod 0755 "$tmp/root/usr/lib/ps5-cachyos-tools/modules/example/boot.sh"
+before_reapply=$(cat "$tmp/root/var/lib/ps5-cachyos-tools/example.count" 2>/dev/null || echo 0)
+if "$tmp/root/usr/local/bin/ps5-cachyos-tools" reapply example --root "$tmp/root" >/tmp/ps5-tools-reapply.out 2>&1 && test -f "$tmp/root/var/lib/ps5-cachyos-tools/state/reapply/example.request" && test "$(cat "$tmp/root/var/lib/ps5-cachyos-tools/example.count" 2>/dev/null || echo 0)" = "$before_reapply"; then ok 'reapply offline pianifica senza eseguire hook'; else no 'reapply offline ha eseguito hook o non ha pianificato'; fi
 mkdir -p "$tmp/root/usr/lib/ps5-cachyos-tools/core" "$tmp/root/var/lib/ps5-cachyos-tools/state/modules"
 cp "$ROOT/lib/core/"*.sh "$tmp/root/usr/lib/ps5-cachyos-tools/core/"; cp "$ROOT/lib/core/boot-runner.sh" "$tmp/root/usr/lib/ps5-cachyos-tools/boot-runner"; chmod 0755 "$tmp/root/usr/lib/ps5-cachyos-tools/boot-runner"
 if CORE_PREFIX="$tmp/root/usr/lib/ps5-cachyos-tools" CORE_STATE_ROOT="$tmp/root" CORE_RUN_ROOT="$tmp/root" "$tmp/root/usr/lib/ps5-cachyos-tools/boot-runner" normal >/dev/null 2>&1; then ok 'runner esegue task once dopo installazione'; else no 'runner non esegue task once'; fi
@@ -128,4 +147,31 @@ chmod 0755 "$fixture_repo/modules/failure-fixture/install.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$fixture_repo/modules/failure-fixture/boot.sh"; chmod 0755 "$fixture_repo/modules/failure-fixture/boot.sh"
 mkdir -p "$tmp/fail-root/etc"; printf 'ID=linux\nNAME=fixture\n' > "$tmp/fail-root/etc/os-release"
 if ( source "$ROOT/lib/core/log.sh"; source "$ROOT/lib/core/target.sh"; source "$ROOT/lib/core/registry.sh"; source "$ROOT/lib/core/dependencies.sh"; source "$ROOT/lib/core/service.sh"; source "$ROOT/lib/core/installer.sh"; CORE_INSTALL_MODE=offline core_install "$tmp/fail-root" "$fixture_repo" failure-fixture ) >/dev/null 2>&1; then no 'hook failure accettato'; else [ ! -e "$tmp/fail-root/etc/failure-fixture.marker" ] && [ ! -e "$tmp/fail-root/usr/lib/ps5-cachyos-tools" ] && ok 'rollback transazionale rimuove artefatto hook fallito' || no 'rollback transazionale lascia artefatti hook'; fi
+service_repo="$tmp/service-repo"; cp -a "$ROOT/." "$service_repo"; mkdir -p "$service_repo/modules/fixture-service"
+cat > "$service_repo/modules/fixture-service/module.conf" <<'EOF'
+ID=fixture-service
+NAME=Fixture service
+ENABLED=true
+TYPE=service
+RUN_POLICY=always
+BOOT_PHASE=service
+REVISION=1
+DEPENDENCIES=
+SERVICE_UNIT=fixture-service.service
+FAILURE_POLICY=critical
+OWNED_PATHS=/etc/systemd/system/fixture-service.service /etc/systemd/system/multi-user.target.wants/fixture-service.service
+EOF
+printf '#!/usr/bin/env bash\nexit 0\n' > "$service_repo/modules/fixture-service/install.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$service_repo/modules/fixture-service/remove.sh"; chmod 0755 "$service_repo/modules/fixture-service/"*.sh
+cat > "$service_repo/systemd/fixture-service.service" <<'EOF'
+[Unit]
+Description=Fixture service
+[Service]
+Type=oneshot
+ExecStart=/bin/true
+[Install]
+WantedBy=multi-user.target
+EOF
+mkdir -p "$tmp/service-root/etc"; printf 'ID=linux\nNAME=fixture\n' > "$tmp/service-root/etc/os-release"
+if "$service_repo/bin/ps5-cachyos-tools" install --root "$tmp/service-root" --module fixture-service >/tmp/ps5-tools-service.out 2>&1 && test -f "$tmp/service-root/etc/systemd/system/fixture-service.service" && test ! -e "$tmp/service-root/usr/local/bin/ps5-fan"; then ok 'modulo service generico selettivo senza artefatti fan'; else no 'modulo service generico non isolato'; fi
+if "$tmp/service-root/usr/local/bin/ps5-cachyos-tools" remove fixture-service --root "$tmp/service-root" >/tmp/ps5-tools-service-remove.out 2>&1 && test ! -e "$tmp/service-root/etc/systemd/system/fixture-service.service" && test ! -e "$tmp/service-root/usr/lib/ps5-cachyos-tools/modules/fixture-service"; then ok 'rimozione generica del service completata'; else no 'rimozione generica del service fallita'; fi
 printf '%s\n' "$pass test superati, $fail falliti"; [ "$fail" -eq 0 ]
