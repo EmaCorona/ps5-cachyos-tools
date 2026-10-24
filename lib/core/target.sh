@@ -75,3 +75,12 @@ core_target_validate_live() {
     [ -r /etc/os-release ] || { core_die 'sistema live senza etc/os-release'; return 1; }
     printf '/\n'
 }
+
+core_target_boot_path() {
+    local root=$1 boot=$2 resolved
+    [ -n "$boot" ] || return 0
+    [ ! -L "$boot" ] || return 1
+    resolved=$(realpath -e -- "$boot" 2>/dev/null) || return 1
+    [ "$resolved" != / ] || return 1
+    case "$resolved/" in "$root/"*|"$root") printf '%s\n' "$resolved";; *) return 1;; esac
+}

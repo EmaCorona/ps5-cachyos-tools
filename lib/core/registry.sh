@@ -73,6 +73,7 @@ core_registry_load_overrides() {
             [[ "$raw" =~ ^(ENABLED|RUN_POLICY)=([^[:space:]]+)$ ]] || { core_log "override non valido: $file"; return 1; }
             key=${BASH_REMATCH[1]}; value=${BASH_REMATCH[2]}
             case "$key:$value" in ENABLED:true|ENABLED:false|RUN_POLICY:once|RUN_POLICY:always) ;; *) return 1;; esac
+            [ "$key" != RUN_POLICY ] || [ "$(core_registry_field "$id" 2)" != service ] || { core_log "RUN_POLICY non sovrascrivibile per service: $id"; return 1; }
             [ -z "${CORE_MODULE_OVERRIDE[$id:$key]+x}" ] || return 1
             CORE_MODULE_OVERRIDE[$id:$key]=$value
         done < "$file"

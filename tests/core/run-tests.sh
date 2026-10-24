@@ -125,6 +125,7 @@ printf '%s\n' changed > "$1/etc/failure-fixture.marker"
 exit 23
 EOF
 chmod 0755 "$fixture_repo/modules/failure-fixture/install.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$fixture_repo/modules/failure-fixture/boot.sh"; chmod 0755 "$fixture_repo/modules/failure-fixture/boot.sh"
 mkdir -p "$tmp/fail-root/etc"; printf 'ID=linux\nNAME=fixture\n' > "$tmp/fail-root/etc/os-release"
 if ( source "$ROOT/lib/core/log.sh"; source "$ROOT/lib/core/target.sh"; source "$ROOT/lib/core/registry.sh"; source "$ROOT/lib/core/dependencies.sh"; source "$ROOT/lib/core/service.sh"; source "$ROOT/lib/core/installer.sh"; CORE_INSTALL_MODE=offline core_install "$tmp/fail-root" "$fixture_repo" failure-fixture ) >/dev/null 2>&1; then no 'hook failure accettato'; else [ ! -e "$tmp/fail-root/etc/failure-fixture.marker" ] && [ ! -e "$tmp/fail-root/usr/lib/ps5-cachyos-tools" ] && ok 'rollback transazionale rimuove artefatto hook fallito' || no 'rollback transazionale lascia artefatti hook'; fi
 printf '%s\n' "$pass test superati, $fail falliti"; [ "$fail" -eq 0 ]

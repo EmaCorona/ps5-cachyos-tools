@@ -2,9 +2,10 @@
 set -u
 
 core_install_body() {
-    local root=$1 repo=$2 module=${3-} moddir id hook path lock_dir target rc core_src fan_src requires_boot
+    local root=$1 repo=$2 module=${3-} moddir id hook path lock_dir target rc core_src fan_src requires_boot order type
     [ -d "$repo/lib/core" ] && core_src="$repo/lib/core" || core_src="$repo/core"
     [ -f "$repo/lib/modules/fan.sh" ] && fan_src="$repo/lib/modules/fan.sh" || fan_src="$repo/modules/fan.sh"
+    CORE_CONFIG_ROOT=${CORE_CONFIG_ROOT:-$root}
     for path in /usr /usr/lib /usr/local /usr/local/bin /etc /etc/ps5-fan /etc/systemd /etc/systemd/system /etc/udev /etc/udev/rules.d /var /var/lib /var/lib/ps5-cachyos-tools /run /run/ps5-cachyos-tools; do core_target_assert_parents "$root" "$path" || return 1; done
     lock_dir="$root/run/ps5-cachyos-tools"; mkdir -p "$lock_dir" || return 1; exec 8>"$lock_dir/install.lock"; flock -n 8 || { core_log 'installazione già attiva'; return 1; }
     core_target_prepare_dir "$root" /usr/lib/ps5-cachyos-tools/core >/dev/null || return 1
@@ -42,18 +43,25 @@ core_install_body() {
     done
     printf '%s\n' "$(date +%s)-$(id -u)-$root" > "$root/var/lib/ps5-cachyos-tools/install.identity"
     core_registry_discover "$repo/modules" >/dev/null || return 1
+    core_registry_validate_dependencies || return 1
+    order=$(core_registry_order) || return 1
     [ -z "$module" ] || [ "${CORE_MODULE[$module]+x}" = x ] || { core_log "modulo sconosciuto: $module"; return 1; }
-    for moddir in "$repo"/modules/*; do [ -d "$moddir" ] || continue; id=${moddir##*/}; [ "$id" != _template ] || continue; [ -z "$module" ] || [ "$module" = "$id" ] || continue
+    while IFS= read -r id; do [ -n "$id" ] || continue; moddir="$repo/modules/$id"
+        [ -d "$moddir" ] || return 1
+        [ -z "$module" ] || [ "$module" = "$id" ] || continue
         [ -f "$moddir/module.conf" ] && [ ! -L "$moddir/module.conf" ] || return 1
         for hook in install.sh boot.sh check.sh remove.sh; do [ ! -L "$moddir/$hook" ] || { core_log "hook symlink non trusted: $id/$hook"; return 1; }; done
         CORE_REGISTRY_ROOT="$repo/modules" core_registry_discover "$repo/modules" >/dev/null || return 1
         [ "${CORE_MODULE[$id]+x}" = x ] || return 1
         requires_boot=$(core_registry_field "$id" 9)
+        type=$(core_registry_field "$id" 2)
         if [ "$requires_boot" = true ]; then
             if [ -z "${CORE_BOOT_TARGET:-}" ] && [ "${CORE_INSTALL_MODE:-offline}" = live ] && [ -d /boot ]; then CORE_BOOT_TARGET=/boot; fi
             [ -n "${CORE_BOOT_TARGET:-}" ] || { core_log "modulo $id richiede --boot"; return 1; }
             [ -d "$CORE_BOOT_TARGET" ] || { core_log "partizione boot non disponibile: $CORE_BOOT_TARGET"; return 1; }
         fi
+        [ -x "$moddir/install.sh" ] || { core_log "install hook obbligatorio assente: $id"; return 1; }
+        [ "$type" != task ] || [ -x "$moddir/boot.sh" ] || { core_log "boot hook obbligatorio assente: $id"; return 1; }
         mkdir -p "$root/usr/lib/ps5-cachyos-tools/modules/$id"; cp -a "$moddir/module.conf" "$root/usr/lib/ps5-cachyos-tools/modules/$id/" || return 1
         for hook in install.sh boot.sh check.sh remove.sh; do
             if [ -e "$moddir/$hook" ]; then
@@ -69,7 +77,7 @@ core_install_body() {
                 [ "$rc" -eq 0 ] || { core_log "install hook fallito: $id (rc=$rc)"; return "$rc"; }
             fi
         fi
-    done
+    done <<< "$order"
     core_service_install "$root" "$repo" || return 1
     if [ "${CORE_INSTALL_MODE:-offline}" = live ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then
         systemctl daemon-reload || return 1
@@ -113,8 +121,32 @@ core_txn_restore() {
     return "$result"
 }
 
+core_install_preflight() {
+    local root=$1 repo=$2 module=${3-} id moddir type requires_boot unit order
+    core_registry_discover "$repo/modules" >/dev/null || return 1
+    core_registry_validate_dependencies || return 1
+    order=$(core_registry_order) || return 1
+    [ -z "$module" ] || [ "${CORE_MODULE[$module]+x}" = x ] || return 1
+    while IFS= read -r id; do
+        [ -n "$id" ] || continue; [ -z "$module" ] || [ "$module" = "$id" ] || continue
+        moddir="$repo/modules/$id"; [ -d "$moddir" ] || return 1
+        [ -x "$moddir/install.sh" ] || { core_log "install hook obbligatorio assente: $id"; return 1; }
+        type=$(core_registry_field "$id" 2); [ "$type" != task ] || [ -x "$moddir/boot.sh" ] || { core_log "boot hook obbligatorio assente: $id"; return 1; }
+        requires_boot=$(core_registry_field "$id" 9)
+        [ "$requires_boot" != true ] || [ -n "${CORE_BOOT_TARGET:-}" ] || { core_log "modulo $id richiede --boot"; return 1; }
+        unit=$(core_registry_field "$id" 7)
+        [ -z "$unit" ] || [ -f "$repo/systemd/$unit" ] || [ -f "$repo/usr/lib/ps5-cachyos-tools/systemd/$unit" ] || { core_log "unit dichiarata assente: $id/$unit"; return 1; }
+    done <<< "$order"
+}
+
 core_install() {
-    local root=$1 backup path
+    local root=$1 backup path was_enabled=0 was_active=0
+    CORE_CONFIG_ROOT=${CORE_CONFIG_ROOT:-$root}
+    core_install_preflight "$root" "$2" "${3-}" || return 1
+    if [ "${CORE_INSTALL_MODE:-offline}" = live ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then
+        systemctl is-enabled --quiet ps5-tools-early.service && was_enabled=1 || true
+        systemctl is-active --quiet ps5-tools-early.service && was_active=1 || true
+    fi
     backup=$(mktemp -d "$root/.ps5-cachyos-tools-txn.XXXXXX") || return 1
     core_txn_snapshot "$root" "$backup" "$2" || { core_log 'snapshot transazione fallito'; rm -rf -- "$backup"; return 1; }
     if core_install_body "$@"; then
@@ -123,6 +155,11 @@ core_install() {
     fi
     core_log 'installazione core fallita: rollback transazione'
     core_txn_restore "$root" "$backup" || core_log 'ROLLBACK_PARTIAL: ripristino artefatti transazione incompleto'
+    if [ "${CORE_INSTALL_MODE:-offline}" = live ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload 2>/dev/null || true
+        if [ "$was_enabled" -eq 1 ]; then systemctl enable ps5-tools-early.service ps5-tools-boot.service >/dev/null 2>&1 || true; else systemctl disable ps5-tools-early.service ps5-tools-boot.service >/dev/null 2>&1 || true; fi
+        if [ "$was_active" -eq 1 ]; then systemctl start ps5-tools-early.service >/dev/null 2>&1 || true; else systemctl stop ps5-tools-early.service >/dev/null 2>&1 || true; fi
+    fi
     rm -rf -- "$backup"
     return 1
 }
