@@ -1,6 +1,46 @@
 #!/usr/bin/env bash
 set -u
 CORE_SERVICE_FILE_CHANGED=0
+CORE_SERVICE_WAS_ENABLED=0
+CORE_SERVICE_WAS_ACTIVE=0
+
+core_service_snapshot_state() {
+    local root=$1 id=$2 unit
+    CORE_SERVICE_WAS_ENABLED=0; CORE_SERVICE_WAS_ACTIVE=0
+    [ "$root" = / ] || return 0
+    unit=$(core_registry_field "$id" 7); [ -n "$unit" ] || return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+    systemctl is-enabled --quiet "$unit" && CORE_SERVICE_WAS_ENABLED=1 || true
+    systemctl is-active --quiet "$unit" && CORE_SERVICE_WAS_ACTIVE=1 || true
+}
+
+core_service_stop() {
+    local root=$1 id=$2 unit
+    [ "$root" = / ] || return 0
+    unit=$(core_registry_field "$id" 7); [ -n "$unit" ] || return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+    systemctl stop "$unit" || return 1
+    systemctl disable "$unit" || return 1
+    systemctl daemon-reload || return 1
+}
+
+core_service_restore_state() {
+    local root=$1 id=$2 unit result=0
+    [ "$root" = / ] || return 0
+    unit=$(core_registry_field "$id" 7); [ -n "$unit" ] || return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+    systemctl daemon-reload || result=1
+    if [ "$CORE_SERVICE_WAS_ENABLED" -eq 1 ]; then systemctl enable "$unit" || result=1; else systemctl disable "$unit" || result=1; fi
+    if [ "$CORE_SERVICE_WAS_ACTIVE" -eq 1 ]; then systemctl start "$unit" || result=1; else systemctl stop "$unit" || result=1; fi
+    return "$result"
+}
+
+core_service_source() {
+    local repo=$1 unit=$2
+    if [ -f "$repo/systemd/$unit" ]; then printf '%s\n' "$repo/systemd/$unit"; return 0; fi
+    if [ -f "$repo/usr/lib/ps5-cachyos-tools/systemd/$unit" ]; then printf '%s\n' "$repo/usr/lib/ps5-cachyos-tools/systemd/$unit"; return 0; fi
+    return 1
+}
 
 core_service_install_file() {
     local source=$1 target=$2 mode=$3 managed=${4:-0}
@@ -31,7 +71,7 @@ core_service_enable_link() {
 core_service_module_install() {
     local root=$1 repo=$2 id=$3 unit source target wants
     unit=$(core_registry_field "$id" 7); [ -n "$unit" ] || return 0
-    source="$repo/systemd/$unit"; [ -f "$source" ] || return 1
+    source=$(core_service_source "$repo" "$unit") || return 1
     core_target_assert_parents "$root" "/etc/systemd/system/$unit" || return 1
     target="$root/etc/systemd/system/$unit"
     local managed=0 manifest

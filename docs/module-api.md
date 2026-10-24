@@ -13,3 +13,5 @@ Un hook di installazione deve restituire zero solo dopo aver completato tutte le
 `reapply ID --live` invoca soltanto l'hook del modulo richiesto nella sua fase. `reapply ID --root ROOT` registra una richiesta in `var/lib/ps5-cachyos-tools/state/reapply/` e non esegue hook runtime sul PC; la richiesta viene consumata dal runner al boot successivo.
 
 In modalità offline `--root` e `--boot` possono riferirsi a mount separati. Entrambi devono essere directory assolute, esistenti, non symlink e diverse da `/`. I servizi dichiarati dal manifest vengono copiati e abilitati nel target senza chiamare `systemctl` sull'host.
+
+Per un modulo `service`, la rimozione salva prima gli artefatti e lo stato operativo, arresta e disabilita la unit in modalità live, esegue l'hook e ripristina file e stato systemd se un passaggio fallisce. Una unit può provenire da `systemd/<unit>` oppure dal runtime `usr/lib/ps5-cachyos-tools/systemd/<unit>`; preflight e installazione usano lo stesso resolver.

@@ -165,7 +165,8 @@ FAILURE_POLICY=critical
 OWNED_PATHS=/etc/systemd/system/fixture-service.service /etc/systemd/system/multi-user.target.wants/fixture-service.service
 EOF
 printf '#!/usr/bin/env bash\nexit 0\n' > "$service_repo/modules/fixture-service/install.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$service_repo/modules/fixture-service/remove.sh"; chmod 0755 "$service_repo/modules/fixture-service/"*.sh
-cat > "$service_repo/systemd/fixture-service.service" <<'EOF'
+mkdir -p "$service_repo/usr/lib/ps5-cachyos-tools/systemd"
+cat > "$service_repo/usr/lib/ps5-cachyos-tools/systemd/fixture-service.service" <<'EOF'
 [Unit]
 Description=Fixture service
 [Service]

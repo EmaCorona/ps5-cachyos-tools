@@ -153,7 +153,7 @@ core_install_preflight() {
         requires_boot=$(core_registry_field "$id" 9)
         [ "$requires_boot" != true ] || [ -n "${CORE_BOOT_TARGET:-}" ] || { core_log "modulo $id richiede --boot"; return 1; }
         unit=$(core_registry_field "$id" 7)
-        [ -z "$unit" ] || [ -f "$repo/systemd/$unit" ] || [ -f "$repo/usr/lib/ps5-cachyos-tools/systemd/$unit" ] || { core_log "unit dichiarata assente: $id/$unit"; return 1; }
+        [ -z "$unit" ] || core_service_source "$repo" "$unit" >/dev/null || { core_log "unit dichiarata assente: $id/$unit"; return 1; }
     done <<< "$order"
 }
 

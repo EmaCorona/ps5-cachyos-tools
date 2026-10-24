@@ -15,6 +15,8 @@ La prima implementazione del framework non distingueva sempre gli antenati di un
 - copie idempotenti per la CLI installata e per le unit systemd, con conflitti estranei rifiutati;
 - installazione selettiva senza copiare automaticamente gli artefatti fan;
 - rimozione generica di artefatti e stato del modulo;
+- snapshot e ripristino dello stato `active`/`enabled` dei servizi durante `remove`;
+- resolver condiviso per unit dichiarate nel repository e nel runtime installato;
 - conservazione del backup quando il rollback filesystem è parziale.
 
 ## Verifica e limiti
