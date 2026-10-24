@@ -35,6 +35,37 @@ core_service_restore_state() {
     return "$result"
 }
 
+core_service_reapply() {
+    local root=$1 id=$2 unit dep dep_type policy revision boot rc=0
+    [ "$root" = / ] || return 1
+    unit=$(core_registry_field "$id" 7); [ -n "$unit" ] || return 1
+    policy=$(core_registry_field "$id" 3); revision=$(core_registry_field "$id" 5); boot=$(core_state_boot_id)
+    mkdir -p /run/ps5-cachyos-tools || return 1
+    exec 9>/run/ps5-cachyos-tools/reapply.lock
+    flock -n 9 || { core_log "reapply già attivo: $id"; return 1; }
+    for dep in $(core_registry_field "$id" 6); do
+        [ "$(core_registry_field "$dep" 1)" = true ] || { core_state_write / "$id" BLOCKED_DEPENDENCY "$policy" "$revision" 66 "$boot"; return 1; }
+        dep_type=$(core_registry_field "$dep" 2)
+        if [ "$dep_type" = service ]; then
+            systemctl is-active --quiet "$(core_registry_field "$dep" 7)" || { core_state_write / "$id" BLOCKED_DEPENDENCY "$policy" "$revision" 66 "$boot"; return 1; }
+        elif [ "$(core_state_get / status "$dep")" != SUCCESS ]; then
+            core_state_write / "$id" BLOCKED_DEPENDENCY "$policy" "$revision" 66 "$boot"; return 1
+        fi
+    done
+    core_service_snapshot_state / "$id"
+    core_state_write / "$id" RUNNING "$policy" "$revision" 0 "$boot" || return 1
+    systemctl daemon-reload || rc=$?
+    [ "$rc" -ne 0 ] || systemctl restart "$unit" || rc=$?
+    [ "$rc" -ne 0 ] || systemctl is-active --quiet "$unit" || rc=1
+    if [ "$rc" -eq 0 ]; then
+        core_state_write / "$id" SUCCESS "$policy" "$revision" 0 "$boot"
+    else
+        core_state_write / "$id" FAILED "$policy" "$revision" "$rc" "$boot" || true
+        core_service_restore_state / "$id" || core_log "ROLLBACK_FILES_RESTORED_SERVICE_FAILED: service=$id"
+        return "$rc"
+    fi
+}
+
 core_service_source() {
     local repo=$1 unit=$2
     if [ -f "$repo/systemd/$unit" ]; then printf '%s\n' "$repo/systemd/$unit"; return 0; fi
