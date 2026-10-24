@@ -290,7 +290,7 @@ module_fan_run() {
         local filesystem_result=0 service_result=0
         if [ "$backup_state" = BACKUP_CREATED ]; then backup_state=ROLLBACK_IN_PROGRESS; module_fan_restore "$root" "$backup_dir" || filesystem_result=1; module_fan_restore_extra "$root" "$backup_dir" || filesystem_result=1; [ "$filesystem_result" -eq 0 ] && backup_state=ROLLBACK_COMPLETED || backup_state=ROLLBACK_FAILED
         else for path in "${managed[@]}" /etc/ps5-fan/fan.conf /etc/ps5-fan/state /etc/ps5-fan/profiles/low.conf /etc/ps5-fan/profiles/balanced.conf /etc/ps5-fan/profiles/high.conf; do rm -rf -- "$root$path" || { filesystem_result=1; echo "fan: rollback nuovo artefatto fallito: $path" >&2; }; done; fi
-        module_fan_restore_service "$root" "$active_before" "$enabled_before" || service_result=1
+        [ "${CORE_FRAMEWORK_MANAGED:-0}" = 1 ] || module_fan_restore_service "$root" "$active_before" "$enabled_before" || service_result=1
         if [ "$filesystem_result" -ne 0 ]; then module_fan_rollback_result=ROLLBACK_PARTIAL; elif [ "$service_result" -ne 0 ]; then module_fan_rollback_result=ROLLBACK_FILES_RESTORED_SERVICE_FAILED; else module_fan_rollback_result=ROLLBACK_COMPLETED; fi
         echo "fan: $module_fan_rollback_result" >&2
         return 1

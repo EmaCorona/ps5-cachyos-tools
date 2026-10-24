@@ -3,6 +3,7 @@ set -u
 
 core_txn_lock() {
     local root=$1 lock_dir="$1/run/ps5-cachyos-tools"
+    core_target_validate_final "$root" /run/ps5-cachyos-tools "$root/run/ps5-cachyos-tools" || return 1
     mkdir -p "$lock_dir" || return 1
     exec 8>"$lock_dir/transaction.lock"
     flock -n 8 || { core_log 'transazione già attiva'; return 1; }
@@ -85,6 +86,7 @@ core_install_body() {
     [ -d "$repo/lib/core" ] && core_src="$repo/lib/core" || core_src="$repo/core"
     [ -f "$repo/lib/modules/fan.sh" ] && fan_src="$repo/lib/modules/fan.sh" || fan_src="$repo/modules/fan.sh"
     CORE_CONFIG_ROOT=${CORE_CONFIG_ROOT:-$root}
+    core_target_validate_final "$root" /run/ps5-cachyos-tools/runtime-changed "$root/run/ps5-cachyos-tools/runtime-changed" || return 1
     mkdir -p "$root/run/ps5-cachyos-tools/runtime-changed" || return 1
     CORE_REGISTRY_ROOT="$repo/modules" core_registry_discover "$repo/modules" >/dev/null || return 1
     for path in /usr /usr/lib /usr/local /usr/local/bin /etc /etc/ps5-fan /etc/systemd /etc/systemd/system /etc/udev /etc/udev/rules.d /var /var/lib /var/lib/ps5-cachyos-tools /run /run/ps5-cachyos-tools; do core_target_assert_parents "$root" "$path" || return 1; done

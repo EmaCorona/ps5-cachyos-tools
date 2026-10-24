@@ -180,5 +180,31 @@ else
     no 'rollback ha rimosso directory esterna tramite var/lib symlinkato'
 fi
 
+lock_escape_root="$tmp/lock-escape-root"; lock_outside="$tmp/lock-outside"
+mkdir -p "$lock_escape_root" "$lock_outside"; ln -s "$lock_outside" "$lock_escape_root/run"
+if core_txn_lock "$lock_escape_root" >/dev/null 2>&1; then
+    no 'transaction lock accetta run symlinkato'
+elif [ -z "$(find "$lock_outside" -mindepth 1 -print -quit)" ]; then
+    ok 'transaction lock rifiuta run symlinkato senza scrivere fuori root'
+else
+    no 'transaction lock ha scritto fuori root tramite run symlinkato'
+fi
+
+reset_root="$tmp/reset-root"; reset_outside="$tmp/reset-outside"
+mkdir -p "$reset_root/etc" "$reset_outside"; printf 'ID=linux\nNAME=r4\n' > "$reset_root/etc/os-release"
+if "$repo/bin/ps5-cachyos-tools" install --root "$reset_root" --module fan >/dev/null 2>&1; then
+    mkdir -p "$reset_root/var/lib/ps5-cachyos-tools/state"; printf sentinel > "$reset_outside/fan.state"
+    rm -rf "$reset_root/var/lib/ps5-cachyos-tools/state/modules"; ln -s "$reset_outside" "$reset_root/var/lib/ps5-cachyos-tools/state/modules"
+    if "$reset_root/usr/local/bin/ps5-cachyos-tools" reset fan --root "$reset_root" >/dev/null 2>&1; then
+        no 'reset accetta state/modules symlinkato'
+    elif [ "$(cat "$reset_outside/fan.state")" = sentinel ]; then
+        ok 'reset rifiuta state/modules symlinkato senza cancellare fuori root'
+    else
+        no 'reset ha cancellato stato esterno tramite state/modules symlinkato'
+    fi
+else
+    no 'fixture reset non installabile'
+fi
+
 printf '%s\n' "$pass test R4 superati, $fail falliti"
 [ "$fail" -eq 0 ]
