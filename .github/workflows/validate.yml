@@ -58,8 +58,8 @@ jobs:
             fi
           fi
           empty_tree=$(git hash-object -t tree /dev/null)
-          if [ "$base" != "$empty_tree" ]; then
-            git cat-file -e "$base^{commit}"
+          if [ "$base" != "$empty_tree" ] && ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            base=$(git rev-parse "$head^" 2>/dev/null || printf '%s' "$empty_tree")
           fi
           git cat-file -e "$head^{commit}"
           git diff --check "$base" "$head"

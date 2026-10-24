@@ -24,7 +24,7 @@ core_registry_parse_file() {
         [[ "$raw" =~ ^([A-Z][A-Z0-9_]*)=(.*)$ ]] || { core_log "manifest non valido: $file:$line_no"; return 1; }
         key=${BASH_REMATCH[1]}; value=$(core_registry_unquote "${BASH_REMATCH[2]}") || return 1
         case "$key" in
-            ID|NAME|ENABLED|TYPE|RUN_POLICY|BOOT_PHASE|REVISION|DEPENDENCIES|SERVICE_UNIT|FAILURE_POLICY|REQUIRES_BOOT|OWNED_PATHS|READINESS_HOOK) ;;
+            ID|NAME|ENABLED|TYPE|RUN_POLICY|BOOT_PHASE|REVISION|DEPENDENCIES|SERVICE_UNIT|FAILURE_POLICY|REQUIRES_BOOT|OWNED_PATHS|READINESS_HOOK|INSTALL_WHEN_DISABLED) ;;
             *) core_log "chiave manifest non autorizzata: $key"; return 1;;
         esac
         [ -z "${data[$key]+x}" ] || { core_log "chiave duplicata: $key"; return 1; }
@@ -42,6 +42,7 @@ core_registry_parse_file() {
     for dep in ${data[DEPENDENCIES]-}; do [[ "$dep" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { core_log "dipendenza non valida: $id -> $dep"; return 1; }; done
     if [ -n "${data[SERVICE_UNIT]-}" ]; then [[ "${data[SERVICE_UNIT]}" =~ ^[a-zA-Z0-9_.@-]+\.service$ ]] || return 1; fi
     if [ -n "${data[READINESS_HOOK]-}" ]; then [[ "${data[READINESS_HOOK]}" =~ ^[a-zA-Z0-9_.-]+\.sh$ ]] || { core_log "READINESS_HOOK non valido: $id"; return 1; }; fi
+    case "${data[INSTALL_WHEN_DISABLED]-false}" in true|false) ;; *) core_log "INSTALL_WHEN_DISABLED non valido: $id"; return 1;; esac
     case "${data[TYPE]}:${data[BOOT_PHASE]-normal}" in
         task:early|task:normal|service:service) : ;;
         *) core_log "combinazione TYPE/BOOT_PHASE non supportata: $id"; return 1;;
@@ -54,7 +55,7 @@ core_registry_parse_file() {
                 core_log "OWNED_PATHS pericoloso: $id:$path"; return 1;;
         esac
     done
-    CORE_MODULE[$id]=$(printf '%s\034' "${data[NAME]}" "${data[ENABLED]}" "${data[TYPE]}" "${data[RUN_POLICY]}" "${data[BOOT_PHASE]-normal}" "${data[REVISION]-1}" "${data[DEPENDENCIES]-}" "${data[SERVICE_UNIT]-}" "${data[FAILURE_POLICY]-continue}" "${data[REQUIRES_BOOT]-false}" "${data[OWNED_PATHS]-}" "${data[READINESS_HOOK]-}")
+    CORE_MODULE[$id]=$(printf '%s\034' "${data[NAME]}" "${data[ENABLED]}" "${data[TYPE]}" "${data[RUN_POLICY]}" "${data[BOOT_PHASE]-normal}" "${data[REVISION]-1}" "${data[DEPENDENCIES]-}" "${data[SERVICE_UNIT]-}" "${data[FAILURE_POLICY]-continue}" "${data[REQUIRES_BOOT]-false}" "${data[OWNED_PATHS]-}" "${data[READINESS_HOOK]-}" "${data[INSTALL_WHEN_DISABLED]-false}")
 }
 
 core_registry_validate_owned_paths() {

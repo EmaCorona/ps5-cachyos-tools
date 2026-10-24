@@ -17,7 +17,7 @@ Chiusura dei rilievi MOD-R3-01…11 della revisione finale del framework modular
 
 ## Verifiche
 
-- Suite core: 53 test superati, 0 falliti.
+- Suite core: 55 test superati, 0 falliti.
 - Suite fan: 77 test superati, 0 falliti.
 - Sintassi Bash, `git diff --check` e verifica unit systemd in rootfs di staging: PASS.
 - CI GitHub Actions e review indipendente devono essere eseguite sulla versione committata finale.
