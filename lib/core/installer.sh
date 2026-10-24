@@ -245,7 +245,12 @@ core_txn_restore() {
             cp -a -- "$backup$path" "$root$path" || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-paths"; }
         fi
     done < "$backup/.paths"
-    rm -rf -- "$root/run/ps5-cachyos-tools/runtime-changed" || result=1
+    if core_target_validate_final "$root" /run/ps5-cachyos-tools/runtime-changed "$root/run/ps5-cachyos-tools/runtime-changed"; then
+        rm -rf -- "$root/run/ps5-cachyos-tools/runtime-changed" || result=1
+    else
+        result=1
+        printf '%s\n' /run/ps5-cachyos-tools/runtime-changed >> "$backup/.rollback-failed-paths"
+    fi
     if [ -f "$backup/.created-dirs" ]; then
         while IFS= read -r dir; do
             [ -n "$dir" ] || continue

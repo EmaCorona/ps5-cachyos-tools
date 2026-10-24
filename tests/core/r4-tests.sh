@@ -142,5 +142,17 @@ else
     no 'rollback ha modificato la sentinella esterna'
 fi
 
+run_escape_root="$tmp/run-escape-root"; run_outside="$tmp/run-outside"; run_backup="$tmp/run-escape-backup"
+mkdir -p "$run_escape_root" "$run_outside" "$run_backup"; printf sentinel > "$run_outside/sentinel"
+ln -s "$run_outside" "$run_escape_root/run"
+: > "$run_backup/.paths"; : > "$run_backup/.present"
+if core_txn_restore "$run_escape_root" "$run_backup" >/dev/null 2>&1; then
+    no 'rollback ha seguito run symlinkato'
+elif [ "$(cat "$run_outside/sentinel")" = sentinel ]; then
+    ok 'rollback rifiuta run symlinkato senza cancellare la sentinella esterna'
+else
+    no 'rollback ha modificato la sentinella esterna tramite run symlinkato'
+fi
+
 printf '%s\n' "$pass test R4 superati, $fail falliti"
 [ "$fail" -eq 0 ]
