@@ -1,5 +1,7 @@
 # Registro fix
 
+- 2026-10-24 — [preflight installazione modulare](fix-modular-preflight.md): dipendenze, hook obbligatori, boot target e rollback live.
+
 - 2026-10-24 — [completamento framework modulare](fix-modular-framework-completion.md): transazioni con ownership, CLI installata, stato once/always, override e isolamento target; CI remota e hardware ancora da verificare.
 
 - 2026-10-24 — [refactor del framework modulare](fix-modular-framework.md): discovery, target offline/live, state store e runner iniziali; validazione hardware ancora da eseguire.
