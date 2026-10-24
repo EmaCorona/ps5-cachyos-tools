@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 set -u
+CORE_SERVICE_FILE_CHANGED=0
 
 core_service_install_file() {
     local source=$1 target=$2 mode=$3 managed=${4:-0}
     [ -f "$source" ] || return 1
     if [ -f "$target" ]; then
         if cmp -s -- "$source" "$target" && [ "$(stat -c '%a' "$target" 2>/dev/null)" = "$mode" ]; then
+            CORE_SERVICE_FILE_CHANGED=0
             return 0
         fi
         [ "$managed" = 1 ] || { core_log "unit esistente non posseduta: $target"; return 1; }
     fi
     [ ! -L "$target" ] || { core_log "target unit è un symlink estraneo: $target"; return 1; }
-    install -m "$mode" -- "$source" "$target"
+    install -m "$mode" -- "$source" "$target" || return 1
+    CORE_SERVICE_FILE_CHANGED=1
 }
 
 core_service_enable_link() {
@@ -43,7 +46,7 @@ core_service_module_install() {
     if [ "${CORE_INSTALL_MODE:-offline}" = live ] && [ "$root" = / ] && [ "${PS5_TOOLS_NO_START:-0}" != 1 ]; then
         systemctl daemon-reload || return 1
         systemctl enable "$unit" || return 1
-        systemctl start "$unit" || return 1
+        if [ "$CORE_SERVICE_FILE_CHANGED" -eq 1 ]; then systemctl restart "$unit" 2>/dev/null || systemctl start "$unit" || return 1; else systemctl is-active --quiet "$unit" || systemctl start "$unit" || return 1; fi
         systemctl is-active --quiet "$unit" || { core_log "health check service fallito: $unit"; return 1; }
     fi
 }

@@ -37,7 +37,7 @@ core_target_validate_offline() {
 }
 
 core_target_validate_mount() {
-    local path=$1 label=$2 current part
+    local path=$1 label=$2 current part mountpoint
     case "$path" in /*) ;; *) core_die "$label non assoluto"; return 1;; esac
     [ -d "$path" ] || { core_die "$label non è una directory: $path"; return 1; }
     [ ! -L "$path" ] || { core_die "$label non può essere un symlink"; return 1; }
@@ -48,6 +48,14 @@ core_target_validate_mount() {
         [ ! -L "$current" ] || { core_die "antenato $label symlink: $current"; return 1; }
     done
     [ "$(realpath -e -- "$path")" != / ] || { core_die "$label non può essere /"; return 1; }
+    if command -v findmnt >/dev/null 2>&1; then
+        mountpoint=$(findmnt -T "$path" -no TARGET 2>/dev/null || true)
+        if [ "${CORE_TEST_MODE:-0}" != 1 ]; then
+            [ "$mountpoint" = "$path" ] || { core_die "$label non è un mountpoint esplicito: $path"; return 1; }
+        fi
+    elif [ "${CORE_TEST_MODE:-0}" != 1 ]; then
+        core_die "impossibile verificare il mountpoint $label"; return 1
+    fi
 }
 
 core_target_path() {

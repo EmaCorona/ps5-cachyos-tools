@@ -158,7 +158,7 @@ core_install_preflight() {
 }
 
 core_install() {
-    local root=$1 backup path was_enabled=0 was_active=0 rollback_status=ROLLBACK_PARTIAL service_rollback_failed=0
+    local root=$1 backup path was_enabled=0 was_active=0 rollback_status=ROLLBACK_PARTIAL service_rollback_failed=0 filesystem_restore_failed=0
     CORE_CONFIG_ROOT=${CORE_CONFIG_ROOT:-$root}
     core_install_preflight "$root" "$2" "${3-}" || return 1
     if [ "${CORE_INSTALL_MODE:-offline}" = live ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then
@@ -175,6 +175,7 @@ core_install() {
     if core_txn_restore "$root" "$backup"; then
         rollback_status=ROLLBACK_COMPLETED
     else
+        filesystem_restore_failed=1
         core_log "ROLLBACK_PARTIAL: backup conservato in $backup"
     fi
     if [ "${CORE_INSTALL_MODE:-offline}" = live ] && [ "$root" = / ] && command -v systemctl >/dev/null 2>&1; then
@@ -182,7 +183,9 @@ core_install() {
         if [ "$was_enabled" -eq 1 ]; then systemctl enable ps5-tools-early.service ps5-tools-boot.service >/dev/null 2>&1 || service_rollback_failed=1; else systemctl disable ps5-tools-early.service ps5-tools-boot.service >/dev/null 2>&1 || service_rollback_failed=1; fi
         if [ "$was_active" -eq 1 ]; then systemctl start ps5-tools-early.service >/dev/null 2>&1 || service_rollback_failed=1; else systemctl stop ps5-tools-early.service >/dev/null 2>&1 || service_rollback_failed=1; fi
     fi
-    [ "$service_rollback_failed" -eq 0 ] || rollback_status=ROLLBACK_FILES_RESTORED_SERVICE_FAILED
+    if [ "$service_rollback_failed" -ne 0 ]; then
+        [ "$filesystem_restore_failed" -eq 0 ] && rollback_status=ROLLBACK_FILES_RESTORED_SERVICE_FAILED || rollback_status=ROLLBACK_FAILED
+    fi
     if [ "$rollback_status" = ROLLBACK_COMPLETED ]; then
         rm -rf -- "$backup"
     else
@@ -200,4 +203,32 @@ core_remove_module_artifacts() {
         core_target_validate_final "$root" "$path" "$full" || return 1
         rm -f -- "$full" || return 1
     done
+}
+
+core_remove_snapshot() {
+    local root=$1 id=$2 backup=$3 path full
+    : > "$backup/.paths" || return 1
+    for path in $(core_registry_field "$id" 10) /usr/lib/ps5-cachyos-tools/modules/$id /var/lib/ps5-cachyos-tools/state/modules/$id.state; do
+        printf '%s\n' "$path" >> "$backup/.paths" || return 1
+        full="$root$path"
+        core_target_validate_final "$root" "$path" "$full" || return 1
+        if [ -e "$full" ] || [ -L "$full" ]; then
+            mkdir -p "$backup$(dirname "$path")" || return 1
+            cp -a -- "$full" "$backup$path" || return 1
+            printf '%s\n' "$path" >> "$backup/.present" || return 1
+        fi
+    done
+}
+
+core_remove_restore() {
+    local root=$1 backup=$2 path result=0
+    while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        rm -rf -- "$root$path" || result=1
+        if grep -Fxq "$path" "$backup/.present" 2>/dev/null; then
+            mkdir -p "$root$(dirname "$path")" || result=1
+            cp -a -- "$backup$path" "$root$path" || result=1
+        fi
+    done < "$backup/.paths"
+    return "$result"
 }

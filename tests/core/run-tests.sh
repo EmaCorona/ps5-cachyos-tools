@@ -30,6 +30,9 @@ FAILURE_POLICY=continue
 OWNED_PATHS=/usr
 EOF
 if CORE_CONFIG_ROOT="$tmp/root" core_registry_discover "$tmp/bad-modules" >/dev/null 2>&1 && core_registry_validate_owned_paths >/dev/null 2>&1; then no 'OWNED_PATHS pericoloso accettato'; else ok 'OWNED_PATHS pericoloso rifiutato'; fi
+sed -i 's#OWNED_PATHS=/usr#OWNED_PATHS=/usr/lib/ps5-cachyos-tools/modules#' "$tmp/bad-modules/bad/module.conf"
+if CORE_CONFIG_ROOT="$tmp/root" core_registry_discover "$tmp/bad-modules" >/dev/null 2>&1 && core_registry_validate_owned_paths >/dev/null 2>&1; then no 'OWNED_PATHS framework interno accettato'; else ok 'OWNED_PATHS framework interno rifiutato'; fi
+if CORE_TEST_MODE=0 core_target_validate_mount "$tmp/boot" boot >/dev/null 2>&1; then no 'boot non mount accettato fuori test'; else ok 'boot non mount rifiutato fuori test'; fi
 test -e /etc/systemd/system/ps5-tools-boot.service && no 'offline ha scritto la unit sull host' || ok 'offline non scrive unit sull host'
 ln -s /etc "$tmp/root/etc-link"
 if ./bin/ps5-cachyos-tools install --root "$tmp/root/etc-link" --dry-run >/dev/null 2>&1; then no 'target symlink accettato'; else ok 'target symlink non accettato'; fi
@@ -173,5 +176,8 @@ WantedBy=multi-user.target
 EOF
 mkdir -p "$tmp/service-root/etc"; printf 'ID=linux\nNAME=fixture\n' > "$tmp/service-root/etc/os-release"
 if "$service_repo/bin/ps5-cachyos-tools" install --root "$tmp/service-root" --module fixture-service >/tmp/ps5-tools-service.out 2>&1 && test -f "$tmp/service-root/etc/systemd/system/fixture-service.service" && test ! -e "$tmp/service-root/usr/local/bin/ps5-fan"; then ok 'modulo service generico selettivo senza artefatti fan'; else no 'modulo service generico non isolato'; fi
+printf '#!/usr/bin/env bash\nprintf failure > "$1/etc/fixture-remove-failure"\nexit 23\n' > "$tmp/service-root/usr/lib/ps5-cachyos-tools/modules/fixture-service/remove.sh"; chmod 0755 "$tmp/service-root/usr/lib/ps5-cachyos-tools/modules/fixture-service/remove.sh"
+if "$tmp/service-root/usr/local/bin/ps5-cachyos-tools" remove fixture-service --root "$tmp/service-root" >/tmp/ps5-tools-service-remove-fail.out 2>&1 && false || test -f "$tmp/service-root/etc/systemd/system/fixture-service.service"; then ok 'rollback remove conserva il service dopo hook fallito'; else no 'rollback remove non ha conservato il service'; fi
+printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/service-root/usr/lib/ps5-cachyos-tools/modules/fixture-service/remove.sh"; chmod 0755 "$tmp/service-root/usr/lib/ps5-cachyos-tools/modules/fixture-service/remove.sh"
 if "$tmp/service-root/usr/local/bin/ps5-cachyos-tools" remove fixture-service --root "$tmp/service-root" >/tmp/ps5-tools-service-remove.out 2>&1 && test ! -e "$tmp/service-root/etc/systemd/system/fixture-service.service" && test ! -e "$tmp/service-root/usr/lib/ps5-cachyos-tools/modules/fixture-service"; then ok 'rimozione generica del service completata'; else no 'rimozione generica del service fallita'; fi
 printf '%s\n' "$pass test superati, $fail falliti"; [ "$fail" -eq 0 ]
