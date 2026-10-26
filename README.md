@@ -144,7 +144,7 @@ La struttura separa **orchestrazione**, **implementazione dei moduli** e **runti
 
 - **`bin/ps5-cachyos-tools`**: CLI per installazione, verifica, stato, riapplicazione e rimozione.
 - **`lib/core/`**: discovery, validazione dei target, dipendenze, transazioni, registry, stato persistente e integrazione systemd.
-- **`modules/<id>/`**: manifest `module.conf` e hook indipendenti (`install.sh`, `boot.sh`, `check.sh`, `remove.sh` e hook opzionali).
+- **`modules/<id>/`**: manifest `module.conf` e hook indipendenti (`install.sh`, `boot.sh`, `check.sh`, `remove.sh` e hook opzionali, incluso `recover.sh`).
 - **`lib/modules/fan.sh`**, **`bin/ps5-fan*`** e **`config/`**: adapter e implementazione autonoma del controller termico.
 - **`systemd/`**: unit del runner di boot e del servizio ventole.
 
@@ -153,7 +153,7 @@ La struttura separa **orchestrazione**, **implementazione dei moduli** e **runti
 | Modulo | Tipo / esecuzione | Funzionamento |
 | :--- | :--- | :--- |
 | **[`fan`](docs/modules/fan.md)** | `service` · `always` | Installa e gestisce `ps5-fan-daemon.service`: profili `low`, `balanced` e `high`, curva dinamica a 15 zone, lettura APU/Tctl, protezione di emergenza, diagnostica e cambio profilo senza restart. |
-| **[`boot-cleanup`](docs/modules/boot-cleanup.md)** | `task` · `early` · `always` | Analizza esclusivamente record Steam allowlistati, verifica PID, identità del processo e proprietario, rimuove i soli file stale autorizzati e registra un resoconto del boot. Non termina processi né effettua pulizie globali. |
+| **[`boot-cleanup`](docs/modules/boot-cleanup.md)** | `task` · `early` · `always` | Analizza esclusivamente record Steam allowlistati, verifica PID, identità del processo e proprietario, rimuove i soli file stale autorizzati e registra un resoconto del boot. Include un helper manuale per normalizzare i permessi privati di `/tmp/dumps`; il helper non è invocato al boot. |
 | **[`kde`](docs/modules/kde.md)** | `task` · `normal` · `always` | Predispone variabili KWin DRM, gruppi grafici e notifiche senza eliminare preferenze display personali. |
 | **[`gamescope`](docs/modules/gamescope.md)** | `task` · `normal` · `always` | Rileva modalità DRM, avvia Steam su Gamescope, valida override e offre diagnostica video e integrità Steam. |
 | **[`session`](docs/modules/session.md)** | `task` · `normal` · `always` | Coordina TTY1, preferenza Gamescope/KDE, switch bidirezionale e fallback KDE; dipende da KDE e Gamescope. |
@@ -272,7 +272,7 @@ DRY_RUN=0
 
 Impostando `DRY_RUN=1` nel file oppure usando l'override `PS5_CLEANUP_DRY_RUN=1` durante l'esecuzione dell'hook, il task **non elimina i candidati** e registra `action=DRY_RUN` e `would_remove`. Questa simulazione del **modulo a runtime** è distinta da `install --dry-run`, che controlla soltanto l'installazione.
 
-Un risultato `action=NO_ACTION` indica che nel ciclo non è stata eseguita alcuna rimozione; non equivale, da solo, a una verifica generale della salute del sistema. Il cleanup **non** termina Steam, non cancella coredump o journal, non modifica KDE/Gamescope e non interviene su filesystem, M.2, controller ventole o file estranei all'allowlist.
+Un risultato `action=NO_ACTION` indica che nel ciclo non è stata eseguita alcuna rimozione; non equivale, da solo, a una verifica generale della salute del sistema. L'hook automatico **non** termina Steam, non cancella coredump o journal, non modifica KDE/Gamescope e non interviene su filesystem, M.2, controller ventole o file estranei all'allowlist. Separatamente, il modulo installa l'helper manuale `recover.sh`: controlla che Steam sia fermo e, solo se necessario, corregge i permessi della cartella `/tmp/dumps`, senza cancellarne il contenuto. Per i dettagli consulta la [scheda boot-cleanup](docs/modules/boot-cleanup.md).
 
 Per il comportamento e i limiti attuali consulta la [scheda boot-cleanup](docs/modules/boot-cleanup.md).
 

@@ -39,7 +39,7 @@ core_install_module_valid() {
     local target_conf="$root/usr/lib/ps5-cachyos-tools/modules/$id/module.conf"
     [ -f "$target_conf" ] && [ ! -L "$target_conf" ] && cmp -s -- "$repo/modules/$id/module.conf" "$target_conf" || return 1
     [ "$(stat -c '%a' "$target_conf" 2>/dev/null)" = 644 ] || return 1
-    for path in install.sh boot.sh check.sh remove.sh readiness.sh runtime.sh; do
+    for path in install.sh boot.sh check.sh remove.sh readiness.sh runtime.sh recover.sh; do
         source="$repo/modules/$id/$path"; target="$root/usr/lib/ps5-cachyos-tools/modules/$id/$path"
         if [ -e "$source" ]; then
             [ -f "$target" ] && [ ! -L "$target" ] && cmp -s -- "$source" "$target" || return 1
@@ -154,7 +154,7 @@ core_install_body() {
     while IFS= read -r id; do [ -n "$id" ] || continue; moddir="$repo/modules/$id"
         [ -d "$moddir" ] || return 1
         [ -f "$moddir/module.conf" ] && [ ! -L "$moddir/module.conf" ] || return 1
-        for hook in install.sh boot.sh check.sh remove.sh readiness.sh runtime.sh; do [ ! -L "$moddir/$hook" ] || { core_log "hook symlink non trusted: $id/$hook"; return 1; }; done
+        for hook in install.sh boot.sh check.sh remove.sh readiness.sh runtime.sh recover.sh; do [ ! -L "$moddir/$hook" ] || { core_log "hook symlink non trusted: $id/$hook"; return 1; }; done
         CORE_REGISTRY_ROOT="$repo/modules" core_registry_discover "$repo/modules" >/dev/null || return 1
         [ "${CORE_MODULE[$id]+x}" = x ] || return 1
         requires_boot=$(core_registry_field "$id" 9)
@@ -176,7 +176,7 @@ core_install_body() {
         fi
         mkdir -p "$root/usr/lib/ps5-cachyos-tools/modules/$id" || return 1
         core_install_copy "$moddir/module.conf" "$root/usr/lib/ps5-cachyos-tools/modules/$id/module.conf" 644 || return 1
-        for hook in install.sh boot.sh check.sh remove.sh readiness.sh runtime.sh; do
+        for hook in install.sh boot.sh check.sh remove.sh readiness.sh runtime.sh recover.sh; do
             if [ -e "$moddir/$hook" ]; then
                 [ -f "$moddir/$hook" ] && [ ! -L "$moddir/$hook" ] || { core_log "hook non regolare: $id/$hook"; return 1; }
                 target=$(core_target_path "$root" "/usr/lib/ps5-cachyos-tools/modules/$id/$hook") || return 1

@@ -122,10 +122,76 @@ fi
 selective="$tmp/selective"; mkdir -p "$selective/etc"; printf 'ID=linux\nNAME=fixture\n' > "$selective/etc/os-release"
 if CORE_TEST_MODE=1 "$ROOT/bin/ps5-cachyos-tools" install --root "$selective" --module boot-cleanup >/dev/null 2>&1 &&
    [ -x "$selective/usr/lib/ps5-cachyos-tools/modules/boot-cleanup/boot.sh" ] &&
+   [ -x "$selective/usr/lib/ps5-cachyos-tools/modules/boot-cleanup/recover.sh" ] &&
+   cmp -s "$ROOT/modules/boot-cleanup/recover.sh" "$selective/usr/lib/ps5-cachyos-tools/modules/boot-cleanup/recover.sh" &&
    [ ! -e "$selective/usr/lib/ps5-cachyos-tools/modules/fan/module.conf" ]; then
-    ok 'installazione selettiva di solo boot-cleanup su root pulita'
+    ok 'installazione selettiva include recovery helper e solo boot-cleanup'
 else
     no 'installazione selettiva di boot-cleanup ha installato moduli extra o fallito'
+fi
+
+# The on-demand recovery helper must be deterministic and preserve dump data.
+recover_root="$tmp/recover-root"; recover_uid=$(id -u); recover_gid=$(id -g)
+mkdir -p "$recover_root/etc" "$recover_root/tmp/dumps" "$tmp/mock-bin"
+printf 'steam:x:%s:%s:Steam:/home/steam:/bin/bash\n' "$recover_uid" "$recover_gid" > "$recover_root/etc/passwd"
+chmod 0755 "$recover_root/tmp/dumps"; printf 'keep this dump\n' > "$recover_root/tmp/dumps/diagnostic.dmp"
+cat > "$tmp/mock-bin/pgrep" <<'EOF'
+#!/usr/bin/env bash
+exit "${MOCK_PGREP_STATUS:-1}"
+EOF
+chmod 0755 "$tmp/mock-bin/pgrep"
+recovery="$selective/usr/lib/ps5-cachyos-tools/modules/boot-cleanup/recover.sh"
+if PATH="$tmp/mock-bin:$PATH" MOCK_PGREP_STATUS=1 "$recovery" "$recover_root" >/dev/null 2>&1 &&
+   [ "$(stat -c '%a' "$recover_root/tmp/dumps")" = 700 ] &&
+   [ "$(cat "$recover_root/tmp/dumps/diagnostic.dmp")" = 'keep this dump' ]; then
+    ok 'recovery corregge solo i permessi non privati e conserva i dump'
+else
+    no 'recovery non corregge in modo circoscritto la directory dump'
+fi
+if PATH="$tmp/mock-bin:$PATH" MOCK_PGREP_STATUS=1 "$recovery" "$recover_root" 2>&1 | grep -q '^action=NO_ACTION$'; then
+    ok 'recovery ripetuta non modifica permessi già sicuri'
+else
+    no 'recovery ripetuta non è idempotente'
+fi
+chmod 0755 "$recover_root/tmp/dumps"
+if PATH="$tmp/mock-bin:$PATH" MOCK_PGREP_STATUS=0 "$recovery" "$recover_root" 2>&1 | grep -q '^action=NO_ACTION$' &&
+   [ "$(stat -c '%a' "$recover_root/tmp/dumps")" = 755 ]; then
+    ok 'recovery non modifica i dump se Steam è attivo'
+else
+    no 'recovery ha modificato i dump mentre Steam risulta attivo'
+fi
+if ! PATH="$tmp/mock-bin:$PATH" MOCK_PGREP_STATUS=2 "$recovery" "$recover_root" >/dev/null 2>&1 &&
+   [ "$(stat -c '%a' "$recover_root/tmp/dumps")" = 755 ]; then
+    ok 'errore di rilevamento processi interrompe recovery senza modifiche'
+else
+    no 'recovery ha modificato i dump dopo errore di pgrep'
+fi
+mkdir -p "$tmp/no-pgrep-bin"
+ln -s "$(command -v bash)" "$tmp/no-pgrep-bin/bash"
+ln -s "$(command -v awk)" "$tmp/no-pgrep-bin/awk"
+if ! PATH="$tmp/no-pgrep-bin" "$recovery" "$recover_root" >/dev/null 2>&1 &&
+   [ "$(stat -c '%a' "$recover_root/tmp/dumps")" = 755 ]; then
+    ok 'pgrep assente interrompe recovery senza modifiche'
+else
+    no 'recovery procede se pgrep non è disponibile'
+fi
+mismatch_root="$tmp/mismatch-root"; mismatch_uid=$((recover_uid + 1))
+mkdir -p "$mismatch_root/etc" "$mismatch_root/tmp/dumps"
+printf 'steam:x:%s:%s:Steam:/home/steam:/bin/bash\n' "$mismatch_uid" "$recover_gid" > "$mismatch_root/etc/passwd"
+chmod 0755 "$mismatch_root/tmp/dumps"
+if ! PATH="$tmp/mock-bin:$PATH" MOCK_PGREP_STATUS=1 "$recovery" "$mismatch_root" >/dev/null 2>&1 &&
+   [ "$(stat -c '%a' "$mismatch_root/tmp/dumps")" = 755 ]; then
+    ok 'UID diverso da steam rifiutato senza modifiche'
+else
+    no 'recovery modifica la directory con UID diverso da steam'
+fi
+symlink_root="$tmp/symlink-passwd-root"; mkdir -p "$symlink_root/etc" "$symlink_root/tmp/dumps"
+ln -s "$recover_root/etc/passwd" "$symlink_root/etc/passwd"; chmod 0755 "$symlink_root/tmp/dumps"
+if ! PATH="$tmp/mock-bin:$PATH" MOCK_PGREP_STATUS=1 "$recovery" "$symlink_root" >/dev/null 2>&1 &&
+   [ "$(stat -c '%a' "$symlink_root/tmp/dumps")" = 755 ]; then
+    ok 'passwd symlinkato rifiutato senza modifiche'
+else
+    no 'recovery usa un passwd symlinkato'
 fi
 
 printf 'DRY_RUN=1\nSTEAM_STALE_FILE=/run/ps5-cachyos-tools/boot-cleanup/steam-stale.list\n' > "$selective/etc/ps5-cachyos-tools/boot-cleanup.conf"

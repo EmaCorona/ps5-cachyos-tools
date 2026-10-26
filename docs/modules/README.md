@@ -1,7 +1,7 @@
 # Moduli
 
 - [fan](fan.md): controller termico autonomo a 15 zone.
-- [boot-cleanup](boot-cleanup.md): pulizia limitata a PID allowlistati e verificati.
+- [boot-cleanup](boot-cleanup.md): pulizia limitata a PID allowlistati e helper manuale per la directory dump Steam.
 - [kde](kde.md): compatibilità KDE Plasma Wayland/DRM e notifiche desktop.
 - [gamescope](gamescope.md): sessione Gamescope DRM, configurazione display e diagnostica.
 - [session](session.md): selezione TTY1, switch bidirezionale e fallback KDE.
