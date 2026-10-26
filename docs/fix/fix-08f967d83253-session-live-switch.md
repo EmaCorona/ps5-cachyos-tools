@@ -1,6 +1,6 @@
 # Ripristinato il cambio live tra KDE e Gamescope
 
-- **Commit sorgente:** verrà collegato al commit dell'implementazione nel successivo aggiornamento documentale, dopo che il relativo SHA sarà definitivo.
+- **Commit sorgente:** [`08f967d83253`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/08f967d8325377a121ec5f20159f49fd1c8aa8f9) — `08f967d8325377a121ec5f20159f49fd1c8aa8f9`.
 - **Data:** 2026-10-26
 - **Modulo:** `session`
 
@@ -17,7 +17,7 @@ Il supervisore precedente eseguiva una sola sessione in foreground e terminava c
 - Il supervisore ora resta attivo e lancia KDE e Gamescope in process group separati, arrestando il gruppo corrente prima del cambio.
 - `steamos-session-select` invia richieste atomiche e volatili tramite file richiesta atomico in una directory privata sotto `$XDG_RUNTIME_DIR` e polling del supervisore ogni 200 ms in sessione e al successivo intervallo DRM durante l’attesa.
 - `--default` e `--once` attivano una transizione live senza modificare la scelta del prossimo boot.
-- Un lock singleton impedisce supervisori concorrenti; le richieste durante l'attesa DRM possono interrompere l'attesa per tornare a KDE.
+- Un lock singleton impedisce supervisori concorrenti; le richieste durante l'attesa DRM vengono rilevate al successivo polling per tornare a KDE.
 - La policy versionata rimane l'unica autorità per scegliere la sessione al boot e i fallback Gamescope continuano ad avviare KDE senza cambiare la policy.
 
 ## File coinvolti

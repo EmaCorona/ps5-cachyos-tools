@@ -1,6 +1,6 @@
 # Registro fix
 
-- 2026-10-26 — [commit Session live](fix-pending-session-live-switch.md): aggiunto il controller persistente per tornare tra KDE e Gamescope senza modificare la policy di boot. Riferimento SHA da completare nel commit documentale successivo.
+- 2026-10-26 — [`08f967d83253`](fix-08f967d83253-session-live-switch.md): ripristinato il cambio live KDE↔Gamescope senza modificare la policy di boot.
 
 - 2026-10-26 — [`66f508025ad4`](fix-66f508025ad4-session-policy-authority.md): selezione boot esclusivamente dalla policy versionata, indipendente dalle preferenze persistenti e dal selettore legacy.
 
