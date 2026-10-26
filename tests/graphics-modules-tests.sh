@@ -77,10 +77,17 @@ fakebin="$tmp/fakebin"
 mkdir -p "$fakebin"
 cat > "$fakebin/systemctl" <<'EOF'
 #!/usr/bin/env bash
+printf 'systemctl %s\n' "$*" >> "${PS5_COMMAND_TRACE:-/dev/null}"
 [[ ${1:-} != is-system-running ]] || { echo running; exit 0; }
 exit 0
 EOF
-for command in pgrep pkill loginctl; do printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/$command"; done
+for command in pgrep pkill loginctl; do
+    cat > "$fakebin/$command" <<'EOF'
+#!/usr/bin/env bash
+printf '%s %s\n' "${0##*/}" "$*" >> "${PS5_COMMAND_TRACE:-/dev/null}"
+exit 1
+EOF
+done
 chmod 0755 "$fakebin"/*
 session_config="$tmp/selector/session.conf"
 session_runtime="$tmp/selector/run"
@@ -94,9 +101,16 @@ if PS5_SESSION_CONFIG="$session_config" PS5_SESSION_RUNTIME="$session_runtime" P
    grep -qx 'DEFAULT_SESSION=desktop' "$session_config" && grep -qx 'NEXT_SESSION=desktop' "$session_config"; then
     ok 'alias plasma resta compatibile e seleziona il default KDE'
 else no 'alias sessione legacy non rispettato'; fi
-if XDG_CURRENT_DESKTOP=KDE PS5_SESSION_CONFIG="$session_config" PS5_SESSION_RUNTIME="$session_runtime" PS5_SESSION_COMMON="$COMMON" PATH="$fakebin:$PATH" "$SELECT" --default gamescope >/dev/null 2>&1 && \
+command_trace="$tmp/kde-to-gamescope.commands"
+if XDG_CURRENT_DESKTOP=KDE XDG_SESSION_ID=42 PS5_COMMAND_TRACE="$command_trace" PS5_SESSION_CONFIG="$session_config" \
+   PS5_SESSION_RUNTIME="$session_runtime" PS5_SESSION_COMMON="$COMMON" PATH="$fakebin:$PATH" "$SELECT" --default gamescope >/dev/null 2>&1 && \
    grep -qx 'DEFAULT_SESSION=gamescope' "$session_config" && grep -qx 'NEXT_SESSION=gamescope' "$session_config"; then
-    ok 'switch persistente da KDE a Gamescope aggiorna default e prossima sessione'
+    if grep -q 'systemctl --user stop plasma-workspace-wayland.target' "$command_trace" && \
+       grep -q 'pkill -TERM .* -x plasmashell' "$command_trace" && \
+       grep -q 'pkill -TERM .* -x kwin_wayland' "$command_trace" && \
+       grep -q 'loginctl terminate-session 42' "$command_trace"; then
+        ok 'switch persistente KDE→Gamescope aggiorna preferenza e chiude Plasma/sessione corrente'
+    else no 'switch KDE→Gamescope non arresta Plasma e sessione corrente'; fi
 else no 'switch persistente da KDE a Gamescope non applicato'; fi
 if PS5_SESSION_CONFIG="$session_config" PS5_SESSION_RUNTIME="$session_runtime" PS5_SESSION_COMMON="$COMMON" PATH="$fakebin:$PATH" "$SELECT" invalid >/dev/null 2>&1; then no 'selettore accetta un target invalido'; else ok 'selettore rifiuta target non supportato'; fi
 
