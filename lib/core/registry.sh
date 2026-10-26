@@ -24,7 +24,7 @@ core_registry_parse_file() {
         [[ "$raw" =~ ^([A-Z][A-Z0-9_]*)=(.*)$ ]] || { core_log "manifest non valido: $file:$line_no"; return 1; }
         key=${BASH_REMATCH[1]}; value=$(core_registry_unquote "${BASH_REMATCH[2]}") || return 1
         case "$key" in
-            ID|NAME|ENABLED|TYPE|RUN_POLICY|BOOT_PHASE|REVISION|DEPENDENCIES|SERVICE_UNIT|FAILURE_POLICY|REQUIRES_BOOT|OWNED_PATHS|READINESS_HOOK|INSTALL_WHEN_DISABLED|TRANSACTION_PATHS|RUNTIME_HOOK) ;;
+            ID|NAME|ENABLED|TYPE|RUN_POLICY|BOOT_PHASE|REVISION|DEPENDENCIES|SERVICE_UNIT|FAILURE_POLICY|REQUIRES_BOOT|OWNED_PATHS|READINESS_HOOK|INSTALL_WHEN_DISABLED|TRANSACTION_PATHS|RUNTIME_HOOK|BOOT_TRANSACTION_PATHS) ;;
             *) core_log "chiave manifest non autorizzata: $key"; return 1;;
         esac
         [ -z "${data[$key]+x}" ] || { core_log "chiave duplicata: $key"; return 1; }
@@ -59,10 +59,15 @@ core_registry_parse_file() {
         [[ "$path" = /* && "$path" != *'..'* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] || { core_log "TRANSACTION_PATHS non valido: $id"; return 1; }
         case "$path" in /|/etc|/usr|/usr/lib|/usr/local|/var|/var/lib|/run|/etc/systemd|/etc/systemd/system|/etc/ps5-fan|/etc/ps5-fan/profiles|*/.ps5-cachyos-tools-txn.*) core_log "TRANSACTION_PATHS pericoloso: $id:$path"; return 1;; esac
     done
+    for path in ${data[BOOT_TRANSACTION_PATHS]-}; do
+        [[ "$path" = /* && "$path" != / && "$path" != *'..'* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] || { core_log "BOOT_TRANSACTION_PATHS non valido: $id"; return 1; }
+        case "$path" in */) core_log "BOOT_TRANSACTION_PATHS deve indicare file: $id:$path"; return 1;; esac
+    done
+    [ -z "${data[BOOT_TRANSACTION_PATHS]-}" ] || [ "${data[REQUIRES_BOOT]-false}" = true ] || { core_log "BOOT_TRANSACTION_PATHS richiede REQUIRES_BOOT=true: $id"; return 1; }
     if [ -n "${data[RUNTIME_HOOK]-}" ]; then
         [[ "${data[RUNTIME_HOOK]}" =~ ^[a-zA-Z0-9_.-]+\.sh$ ]] || { core_log "RUNTIME_HOOK non valido: $id"; return 1; }
     fi
-    CORE_MODULE[$id]=$(printf '%s\034' "${data[NAME]}" "${data[ENABLED]}" "${data[TYPE]}" "${data[RUN_POLICY]}" "${data[BOOT_PHASE]-normal}" "${data[REVISION]-1}" "${data[DEPENDENCIES]-}" "${data[SERVICE_UNIT]-}" "${data[FAILURE_POLICY]-continue}" "${data[REQUIRES_BOOT]-false}" "${data[OWNED_PATHS]-}" "${data[READINESS_HOOK]-}" "${data[INSTALL_WHEN_DISABLED]-false}" "${data[TRANSACTION_PATHS]-}" "${data[RUNTIME_HOOK]-}")
+    CORE_MODULE[$id]=$(printf '%s\034' "${data[NAME]}" "${data[ENABLED]}" "${data[TYPE]}" "${data[RUN_POLICY]}" "${data[BOOT_PHASE]-normal}" "${data[REVISION]-1}" "${data[DEPENDENCIES]-}" "${data[SERVICE_UNIT]-}" "${data[FAILURE_POLICY]-continue}" "${data[REQUIRES_BOOT]-false}" "${data[OWNED_PATHS]-}" "${data[READINESS_HOOK]-}" "${data[INSTALL_WHEN_DISABLED]-false}" "${data[TRANSACTION_PATHS]-}" "${data[RUNTIME_HOOK]-}" "${data[BOOT_TRANSACTION_PATHS]-}")
 }
 
 core_registry_validate_owned_paths() {

@@ -24,6 +24,8 @@ Questo file raccoglie le regole operative condivise per gli agenti AI che analiz
 10. **Verifica il risultato dopo l'integrazione e pusha su `main`.** Conferma che `main` contenga un solo commit per la modifica, che il messaggio sia pertinente, che documentazione e test siano inclusi e che il branch punti al risultato atteso. Esegui il push di `main` su `origin` e comunica all'utente il commit finale e il link GitHub.
 11. **Eliminazione obbligatoria del branch di lavoro.** Subito dopo aver completato l'integrazione e il push su `main`, il branch di lavoro (`feature/*`, `fix/*` o `docs/*`) deve essere obbligatoriamente eliminato sia dal repository locale (`git branch -d <branch>`) sia da quello remoto (`git push origin --delete <branch>`). Nessun branch integrato deve rimanere attivo o orfano dopo l'avvenuto merge su `main`.
 
+**Regola universale di eliminazione:** ogni branch che viene integrato in `main` deve essere eliminato subito dopo il push riuscito di `main`, indipendentemente dal tipo o dal prefisso del branch. La regola si applica anche a branch `chore/*`, `test/*`, `hotfix/*`, branch di release, branch temporanei e a qualsiasi altro branch; vale sia per il repository locale sia per `origin`. Non eliminare branch che non sono stati integrati.
+
 ### Regola specifica per i branch di documentazione (`docs/*`)
 
 I branch con prefisso `docs/` seguono l'intero flusso Gitflow sopra descritto (partenza da `main`, branch dedicato, push remoto a ogni commit, divieto di merge anticipato, attesa approvazione esplicita dell'utente, squash a singolo commit prima del merge su `main`).

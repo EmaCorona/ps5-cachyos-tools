@@ -160,9 +160,8 @@ core_install_body() {
         requires_boot=$(core_registry_field "$id" 9)
         type=$(core_registry_field "$id" 2)
         if [ "$requires_boot" = true ]; then
-            if [ -z "${CORE_BOOT_TARGET:-}" ] && [ "${CORE_INSTALL_MODE:-offline}" = live ] && [ -d /boot ]; then CORE_BOOT_TARGET=/boot; fi
             [ -n "${CORE_BOOT_TARGET:-}" ] || { core_log "modulo $id richiede --boot"; return 1; }
-            [ -d "$CORE_BOOT_TARGET" ] || { core_log "partizione boot non disponibile: $CORE_BOOT_TARGET"; return 1; }
+            core_target_validate_mount "$CORE_BOOT_TARGET" boot || return 1
         fi
         [ -x "$moddir/install.sh" ] || { core_log "install hook obbligatorio assente: $id"; return 1; }
         [ "$type" != task ] || [ -x "$moddir/boot.sh" ] || { core_log "boot hook obbligatorio assente: $id"; return 1; }
@@ -206,9 +205,11 @@ core_install_body() {
 }
 
 core_txn_snapshot() {
-    local root=$1 backup=$2 repo=$3 requested=${4-} path id owned transaction selected_order dir
+    local root=$1 backup=$2 repo=$3 requested=${4-} path id owned transaction boot_transaction selected_order dir boot_root
     : > "$backup/.paths" || return 1
     : > "$backup/.created-dirs" || return 1
+    : > "$backup/.boot-paths" || return 1
+    : > "$backup/.boot-present" || return 1
     for dir in /usr/lib/ps5-cachyos-tools /usr/lib/ps5-cachyos-tools/core /usr/lib/ps5-cachyos-tools/modules /usr/lib/ps5-cachyos-tools/systemd /usr/lib/ps5-cachyos-tools/lib /usr/lib/ps5-cachyos-tools/lib/modules /usr/lib/ps5-cachyos-tools/bin /usr/lib/ps5-cachyos-tools/config /usr/lib/ps5-cachyos-tools/config/profiles /run/ps5-cachyos-tools/runtime-changed; do
         [ -e "$root$dir" ] || printf '%s\n' "$dir" >> "$backup/.created-dirs" || return 1
     done
@@ -227,6 +228,14 @@ core_txn_snapshot() {
         for path in $owned; do printf '%s\n' "$path" >> "$backup/.paths" || return 1; done
         transaction=$(core_registry_field "$id" 13)
         for path in $transaction; do printf '%s\n' "$path" >> "$backup/.paths" || return 1; done
+        boot_transaction=$(core_registry_field "$id" 15)
+        if [ -n "$boot_transaction" ]; then
+            boot_root=${CORE_BOOT_TARGET:-}
+            [ -n "$boot_root" ] || { core_log "modulo $id richiede un mount boot per la transazione"; return 1; }
+            for path in $boot_transaction; do
+                grep -Fxq "$path" "$backup/.boot-paths" 2>/dev/null || printf '%s\n' "$path" >> "$backup/.boot-paths" || return 1
+            done
+        fi
     done <<< "$selected_order"
     sort -u "$backup/.paths" -o "$backup/.paths" || return 1
     while IFS= read -r path; do
@@ -238,6 +247,20 @@ core_txn_snapshot() {
             printf '%s\n' "$path" >> "$backup/.present" || return 1
         fi
     done < "$backup/.paths"
+    if [ -s "$backup/.boot-paths" ]; then
+        boot_root=${CORE_BOOT_TARGET:-}
+        [ -n "$boot_root" ] || { core_log 'mount boot assente durante lo snapshot'; return 1; }
+        core_target_validate_mount "$boot_root" boot || return 1
+        while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            core_target_validate_final "$boot_root" "$path" "$boot_root$path" || return 1
+            if [ -e "$boot_root$path" ] || [ -L "$boot_root$path" ]; then
+                core_target_mkdir_path "$root" "${backup#"$root"}/.boot$(dirname "$path")" || return 1
+                cp -a -- "$boot_root$path" "$backup/.boot$path" || return 1
+                printf '%s\n' "$path" >> "$backup/.boot-present" || return 1
+            fi
+        done < "$backup/.boot-paths"
+    fi
 }
 
 core_txn_restore() {
@@ -252,6 +275,22 @@ core_txn_restore() {
             core_target_copy_file "$root" "$path" "$backup$path" || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-paths"; }
         fi
     done < "$backup/.paths"
+    if [ -s "$backup/.boot-paths" ]; then
+        local boot_root=${CORE_BOOT_TARGET:-}
+        if [ -n "$boot_root" ] && core_target_validate_mount "$boot_root" boot; then
+            while IFS= read -r path; do
+                [ -n "$path" ] || continue
+                core_target_validate_final "$boot_root" "$path" "$boot_root$path" || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-boot-paths"; continue; }
+                core_target_remove_path "$boot_root" "$path" 1 || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-boot-paths"; continue; }
+                if grep -Fxq "$path" "$backup/.boot-present" 2>/dev/null; then
+                    core_target_copy_file "$boot_root" "$path" "$backup/.boot$path" || { result=1; printf '%s\n' "$path" >> "$backup/.rollback-failed-boot-paths"; }
+                fi
+            done < "$backup/.boot-paths"
+        else
+            result=1
+            core_log 'mount boot assente o non valido durante il rollback'
+        fi
+    fi
     if core_target_validate_final "$root" /run/ps5-cachyos-tools/runtime-changed "$root/run/ps5-cachyos-tools/runtime-changed"; then
         core_target_remove_path "$root" /run/ps5-cachyos-tools/runtime-changed 1 || result=1
     else
@@ -273,7 +312,7 @@ core_txn_restore() {
 }
 
 core_install_preflight() {
-    local root=$1 repo=$2 module=${3-} id dep moddir type requires_boot unit order readiness_hook runtime_hook
+    local root=$1 repo=$2 module=${3-} id dep moddir type requires_boot unit order readiness_hook runtime_hook boot_transaction boot_root
     core_registry_discover "$repo/modules" >/dev/null || return 1
     core_registry_validate_dependencies || return 1
     core_registry_validate_owned_paths || return 1
@@ -288,7 +327,13 @@ core_install_preflight() {
         [ -x "$moddir/install.sh" ] || { core_log "install hook obbligatorio assente: $id"; return 1; }
         type=$(core_registry_field "$id" 2); [ "$type" != task ] || [ -x "$moddir/boot.sh" ] || { core_log "boot hook obbligatorio assente: $id"; return 1; }
         requires_boot=$(core_registry_field "$id" 9)
-        [ "$requires_boot" != true ] || [ -n "${CORE_BOOT_TARGET:-}" ] || { core_log "modulo $id richiede --boot"; return 1; }
+        boot_transaction=$(core_registry_field "$id" 15)
+        [ "$requires_boot" != true ] && [ -z "$boot_transaction" ] || [ -n "${CORE_BOOT_TARGET:-}" ] || { core_log "modulo $id richiede --boot"; return 1; }
+        if [ -n "$boot_transaction" ]; then
+            boot_root=${CORE_BOOT_TARGET:-}
+            core_target_validate_mount "$boot_root" boot || return 1
+            [ -w "$boot_root" ] || { core_log "boot non scrivibile: $boot_root"; return 1; }
+        fi
         unit=$(core_registry_field "$id" 7)
         [ -z "$unit" ] || core_service_source "$repo" "$unit" >/dev/null || { core_log "unit dichiarata assente: $id/$unit"; return 1; }
         readiness_hook=$(core_registry_field "$id" 11)

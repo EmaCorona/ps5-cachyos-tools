@@ -11,7 +11,7 @@ if [ -f "$SCRIPT_DIR/../lib/core/log.sh" ]; then BASE=$(cd "$SCRIPT_DIR/.." && p
     esac
 fi
 source "$BASE/lib/core/log.sh" 2>/dev/null || source "$BASE/core/log.sh"; source "$BASE/lib/core/target.sh" 2>/dev/null || source "$BASE/core/target.sh"; source "$BASE/lib/core/registry.sh" 2>/dev/null || source "$BASE/core/registry.sh"; source "$BASE/lib/core/dependencies.sh" 2>/dev/null || source "$BASE/core/dependencies.sh"; source "$BASE/lib/core/state.sh" 2>/dev/null || source "$BASE/core/state.sh"; source "$BASE/lib/core/installer.sh" 2>/dev/null || source "$BASE/core/installer.sh"; source "$BASE/lib/core/service.sh" 2>/dev/null || source "$BASE/core/service.sh"
-usage() { printf '%s\n' 'uso: ps5-cachyos-tools list | install (--root ROOT [--boot BOOT]|--live) [--module ID] [--dry-run] [--no-start] | check (--root ROOT|--live) | status [--root ROOT|--live] | reset ID --root ROOT | reapply ID [--root ROOT|--live] | remove --module ID --root ROOT [--keep-config|--purge-config]'; }
+usage() { printf '%s\n' 'uso: ps5-cachyos-tools list | install (--root ROOT [--boot BOOT]|--live [--boot BOOT]) [--module ID] [--vram-size 512MiB|1GiB..8GiB] [--dry-run] [--no-start] | check (--root ROOT|--live) | status [--root ROOT|--live] | reset ID --root ROOT | reapply ID [--root ROOT|--live] | remove --module ID --root ROOT [--keep-config|--purge-config]'; }
 need_arg() { [ "$#" -ge 2 ] && [ -n "$2" ] && { printf '%s\n' "$2"; return 0; }; core_die "valore mancante per $1"; return 2; }
 core_cli_validate_registry_root() {
     local root=$1 registry=/usr/lib/ps5-cachyos-tools/modules
@@ -132,9 +132,21 @@ core_cli_status() {
     done
 }
 main() {
-    local cmd=${1-} root='' boot='' module='' live=0 dry=0 no_start=0 keep_config=1; shift || true
+    local cmd=${1-} root='' boot='' module='' vram_size='' vram_bytes='' live=0 dry=0 no_start=0 keep_config=1; shift || true
     if [[ "$cmd" = reset || "$cmd" = reapply || "$cmd" = remove ]] && [ "$#" -gt 0 ] && [[ "$1" != --* ]]; then module=$1; shift; fi
-    while [ "$#" -gt 0 ]; do case "$1" in --root) root=$(need_arg "$1" "${2-}") || return $?; shift 2;; --boot) boot=$(need_arg "$1" "${2-}") || return $?; shift 2;; --live) live=1; shift;; --module) module=$(need_arg "$1" "${2-}") || return $?; shift 2;; --dry-run) dry=1; shift;; --no-start) no_start=1; shift;; --keep-config) keep_config=1; shift;; --purge-config) keep_config=0; shift;; --force|--all) core_die "$1 richiede un comando esplicito: usare reapply o --module"; return 2;; --help|-h) usage; return 0;; *) core_die "opzione sconosciuta: $1"; return 2;; esac; done
+    while [ "$#" -gt 0 ]; do case "$1" in --root) root=$(need_arg "$1" "${2-}") || return $?; shift 2;; --boot) boot=$(need_arg "$1" "${2-}") || return $?; shift 2;; --live) live=1; shift;; --module) module=$(need_arg "$1" "${2-}") || return $?; shift 2;; --vram-size) vram_size=$(need_arg "$1" "${2-}") || return $?; shift 2;; --dry-run) dry=1; shift;; --no-start) no_start=1; shift;; --keep-config) keep_config=1; shift;; --purge-config) keep_config=0; shift;; --force|--all) core_die "$1 richiede un comando esplicito: usare reapply o --module"; return 2;; --help|-h) usage; return 0;; *) core_die "opzione sconosciuta: $1"; return 2;; esac; done
+    if [ -n "$vram_size" ]; then
+        case "$vram_size" in
+            512MiB) vram_bytes=0x20000000;;
+            1GiB) vram_bytes=0x40000000;; 2GiB) vram_bytes=0x80000000;;
+            3GiB) vram_bytes=0xc0000000;; 4GiB) vram_bytes=0x100000000;;
+            5GiB) vram_bytes=0x140000000;; 6GiB) vram_bytes=0x180000000;;
+            7GiB) vram_bytes=0x1c0000000;; 8GiB) vram_bytes=0x200000000;;
+            *) core_die "dimensione VRAM non valida: $vram_size (valori ammessi: 512MiB, 1GiB–8GiB)"; return 2;;
+        esac
+        [ "$cmd" = install ] || { core_die '--vram-size è valido soltanto con install'; return 2; }
+        [ -z "$module" ] || [ "$module" = vram ] || { core_die '--vram-size richiede --module vram oppure l’installazione di tutti i moduli'; return 2; }
+    fi
     CORE_KEEP_CONFIG=$keep_config; export CORE_KEEP_CONFIG
     if [ "$cmd" = reset ]; then
         [[ "$module" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { core_die 'ID modulo non valido'; return 2; }
@@ -187,7 +199,26 @@ main() {
     if [ "$cmd" = reset ]; then core_cli_reset_safe "$root" "$module" "$live"; return $?; fi
     case "$cmd" in
         list) core_registry_discover "$BASE/modules"; core_registry_validate_dependencies;;
-        install) if [ "$live" -eq 1 ]; then [ -z "$root" ] || { core_die '--live e --root sono incompatibili'; return 2; }; root=$(core_target_validate_live) || return 1; else [ -n "$root" ] || { core_die '--root richiesto in modalità offline'; return 2; }; root=$(core_target_validate_offline "$root" "$boot") || return 1; [ -z "$boot" ] || boot=$(core_target_boot_path "$root" "$boot") || { core_die 'partizione boot non valida'; return 1; }; fi; [ "$dry" -eq 0 ] || { core_registry_discover "$BASE/modules" >/dev/null || return 1; CORE_BOOT_TARGET=$boot core_install_preflight "$root" "$BASE" "$module" || return 1; order=$(core_registry_selection_order "$module") || return 1; core_log "dry-run: target=$root module=${module:-all} boot=${boot:-none}"; while IFS= read -r id; do [ -n "$id" ] || continue; core_log "dry-run: selezionato=$id operazione=install preserve-config=true artifacts=$(core_registry_field "$id" 10)"; done <<< "$order"; return 0; }; PS5_TOOLS_NO_START=$no_start CORE_CONFIG_ROOT=$root CORE_BOOT_TARGET=$boot CORE_INSTALL_MODE=$([ "$live" -eq 1 ] && echo live || echo offline) core_install "$root" "$BASE" "$module" || return 1;;
+        install)
+            if [ "$live" -eq 1 ]; then
+                [ -z "$root" ] || { core_die '--live e --root sono incompatibili'; return 2; }
+                root=$(core_target_validate_live) || return 1
+                [ -z "$boot" ] || boot=$(core_target_boot_path "$root" "$boot") || { core_die 'partizione boot non valida'; return 1; }
+            else
+                [ -n "$root" ] || { core_die '--root richiesto in modalità offline'; return 2; }
+                root=$(core_target_validate_offline "$root" "$boot") || return 1
+                [ -z "$boot" ] || boot=$(core_target_boot_path "$root" "$boot") || { core_die 'partizione boot non valida'; return 1; }
+            fi
+            if [ "$dry" -eq 1 ]; then
+                core_registry_discover "$BASE/modules" >/dev/null || return 1
+                CORE_BOOT_TARGET=$boot CORE_VRAM_SIZE=$vram_bytes core_install_preflight "$root" "$BASE" "$module" || return 1
+                order=$(core_registry_selection_order "$module") || return 1
+                core_log "dry-run: target=$root module=${module:-all} boot=${boot:-none} vram=${vram_size:-preserve-or-default}"
+                while IFS= read -r id; do [ -n "$id" ] || continue; core_log "dry-run: selezionato=$id operazione=install preserve-config=true artifacts=$(core_registry_field "$id" 10)"; done <<< "$order"
+                return 0
+            fi
+            PS5_TOOLS_NO_START=$no_start CORE_CONFIG_ROOT=$root CORE_BOOT_TARGET=$boot CORE_VRAM_SIZE=$vram_bytes CORE_INSTALL_MODE=$([ "$live" -eq 1 ] && echo live || echo offline) core_install "$root" "$BASE" "$module" || return 1
+            ;;
         check) if [ "$live" -eq 1 ]; then [ -z "$root" ] || { core_die '--live e --root sono incompatibili'; return 2; }; root=$(core_target_validate_live) || return 1; else [ -n "$root" ] || { core_die '--root richiesto'; return 2; }; root=$(core_target_validate_offline "$root") || return 1; fi; core_cli_validate_registry_root "$root" || return 1; core_registry_discover "$root/usr/lib/ps5-cachyos-tools/modules" >/dev/null || return 1; for id in "${CORE_MODULE_IDS[@]}"; do core_cli_run_check_hook "$root" "$id" || return 1; done;;
         reset) core_cli_reset_safe "$root" "$module" "$live";;
         remove) [ -n "$module" ] || { core_die '--module richiesto'; return 2; }; if [ "$live" -eq 1 ]; then root=$(core_target_validate_live) || return 1; else root=$(core_target_validate_offline "$root") || return 1; fi; core_registry_discover "$root/usr/lib/ps5-cachyos-tools/modules" >/dev/null || return 1; core_registry_validate_dependencies || return 1; [ "${CORE_MODULE[$module]+x}" = x ] || { core_die "modulo inesistente: $module"; return 1; }; for id in "${CORE_MODULE_IDS[@]}"; do [ "$id" = "$module" ] && continue; for dep in $(core_registry_field "$id" 6); do [ "$dep" != "$module" ] || { core_die "rimozione bloccata: $id dipende da $module"; return 1; }; done; done; backup=$(mktemp -d "$root/.ps5-cachyos-tools-remove.XXXXXX") || return 1; core_remove_snapshot "$root" "$module" "$backup" || { core_log "snapshot remove fallito: $backup"; return 1; }; service_type=$(core_registry_field "$module" 2); [ "$service_type" != service ] || core_service_snapshot_state "$root" "$module"; if [ "$service_type" = service ] && ! core_service_stop "$root" "$module"; then core_remove_restore "$root" "$backup" || true; core_service_restore_state "$root" "$module" || core_log "ROLLBACK_FAILED: service=$module backup=$backup"; core_log "rimozione annullata; backup conservato: $backup"; return 1; fi; hook="$root/usr/lib/ps5-cachyos-tools/modules/$module/remove.sh"; remove_rc=0; if [ -x "$hook" ]; then CORE_INSTALL_MODE=$([ "$live" -eq 1 ] && echo live || echo offline) CORE_TARGET_ROOT="$root" CORE_MODULE_ID="$module" "$hook" "$root" "$keep_config" || remove_rc=$?; else [ "$service_type" != service ] || core_service_module_remove "$root" "$module" || remove_rc=$?; fi; [ "$remove_rc" -eq 0 ] && core_remove_module_artifacts "$root" "$module" || remove_rc=$?; if [ "$remove_rc" -eq 0 ]; then core_target_validate_final "$root" "/usr/lib/ps5-cachyos-tools/modules/$module" "$root/usr/lib/ps5-cachyos-tools/modules/$module" || remove_rc=1; core_target_validate_final "$root" "/var/lib/ps5-cachyos-tools/state/modules/$module.state" "$root/var/lib/ps5-cachyos-tools/state/modules/$module.state" || remove_rc=1; fi; if [ "$remove_rc" -eq 0 ]; then rm -rf -- "$root/usr/lib/ps5-cachyos-tools/modules/$module" "$root/var/lib/ps5-cachyos-tools/state/modules/$module.state" || remove_rc=$?; [ "$remove_rc" -eq 0 ] && { [ ! -e "$root/usr/lib/ps5-cachyos-tools/modules/$module" ] && [ ! -e "$root/var/lib/ps5-cachyos-tools/state/modules/$module.state" ]; } || remove_rc=1; fi; if [ "$remove_rc" -eq 0 ]; then rm -rf -- "$backup"; else core_remove_restore "$root" "$backup" || core_log "ROLLBACK_FAILED: remove backup=$backup"; core_service_restore_state "$root" "$module" || core_log "ROLLBACK_FILES_RESTORED_SERVICE_FAILED: service=$module"; core_log "rimozione fallita; backup conservato: $backup"; return "${remove_rc:-1}"; fi;;

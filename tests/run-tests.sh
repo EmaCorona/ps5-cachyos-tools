@@ -3,6 +3,7 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd); pass=0; fail=0
 ok(){ echo "PASS: $1"; pass=$((pass+1)); }; no(){ echo "FAIL: $1" >&2; fail=$((fail+1)); }
 if "$ROOT/tests/boot-cleanup-tests.sh"; then ok 'suite boot-cleanup completata'; else no 'suite boot-cleanup fallita'; fi
+if "$ROOT/tests/vram-module-tests.sh"; then ok 'suite modulo VRAM completata'; else no 'suite modulo VRAM fallita'; fi
 tmp=$(mktemp -d /tmp/ps5-fan-test.XXXXXX); trap 'rm -rf "$tmp"' EXIT
 export PS5_FAN_LOCK_FILE="$tmp/daemon.lock"
 export PS5_FAN_STATE_FILE="$tmp/default-runtime.state"
