@@ -4,6 +4,9 @@ PS5_SESSION_RUNTIME=${PS5_SESSION_RUNTIME:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)
 PS5_SESSION_CONTROL_DIR=${PS5_SESSION_CONTROL_DIR:-$PS5_SESSION_RUNTIME/ps5-cachyos-tools}
 PS5_SESSION_SWITCH_FILE=${PS5_SESSION_SWITCH_FILE:-$PS5_SESSION_CONTROL_DIR/session.request}
 PS5_SESSION_SUPERVISOR_PID_FILE=${PS5_SESSION_SUPERVISOR_PID_FILE:-$PS5_SESSION_CONTROL_DIR/session-supervisor.pid}
+PS5_SESSION_BOOT_ID=unknown
+IFS= read -r PS5_SESSION_BOOT_ID < "${PS5_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}" || PS5_SESSION_BOOT_ID=unknown
+[[ "$PS5_SESSION_BOOT_ID" =~ ^[A-Fa-f0-9-]{8,64}$ ]] || PS5_SESSION_BOOT_ID=unknown
 PS5_SESSION_DEFAULT=desktop
 PS5_SESSION_NEXT=''
 PS5_SESSION_SWITCH_TARGET=''
@@ -128,8 +131,40 @@ ps5_session_control_take_request() {
     return 1
 }
 
+ps5_session_monotonic_ms() {
+    local uptime seconds fraction
+    IFS=' ' read -r uptime _ < "${PS5_UPTIME_FILE:-/proc/uptime}" || { printf 'unknown'; return 0; }
+    if [[ "$uptime" =~ ^([0-9]+)\.([0-9]{2,})$ ]]; then
+        seconds=${BASH_REMATCH[1]} fraction=${BASH_REMATCH[2]}
+        fraction=${fraction:0:3}; while (( ${#fraction} < 3 )); do fraction+="0"; done
+        printf '%s' "$((10#$seconds * 1000 + 10#$fraction))"
+    else
+        printf 'unknown'
+    fi
+}
+
+ps5_session_current_id() {
+    local pid=''
+    if [[ -n ${PS5_SESSION_ID:-} && $PS5_SESSION_ID =~ ^[A-Za-z0-9._-]{1,128}$ ]]; then
+        printf '%s' "$PS5_SESSION_ID"
+        return 0
+    fi
+    if [[ -f $PS5_SESSION_SUPERVISOR_PID_FILE && ! -L $PS5_SESSION_SUPERVISOR_PID_FILE ]]; then
+        IFS= read -r pid < "$PS5_SESSION_SUPERVISOR_PID_FILE" || true
+    fi
+    [[ $pid =~ ^[1-9][0-9]{0,9}$ ]] || pid=$$
+    printf '%s-%s' "${PS5_SESSION_BOOT_ID:0:8}" "$pid"
+}
+
 ps5_session_log() {
     local level=$1 message=$2 file=${PS5_SESSION_LOG:-${HOME:-/home/steam}/.gamescope-session.log}
-    printf '[%s] session %s: %s\n' "$(date -Is 2>/dev/null || date)" "$level" "$message" >> "$file" 2>/dev/null || true
-    if command -v logger >/dev/null 2>&1; then logger -t ps5-session -- "$level: $message" 2>/dev/null || true; fi
+    local wall session_id monotonic
+    wall=$(date -Is 2>/dev/null || date)
+    session_id=$(ps5_session_current_id)
+    monotonic=$(ps5_session_monotonic_ms)
+    printf '[%s] session boot_id=%s session_id=%s monotonic_ms=%s %s: %s\n' \
+        "$wall" "$PS5_SESSION_BOOT_ID" "$session_id" "$monotonic" "$level" "$message" >> "$file" 2>/dev/null || true
+    if command -v logger >/dev/null 2>&1; then
+        logger -t ps5-session -- "boot_id=$PS5_SESSION_BOOT_ID session_id=$session_id monotonic_ms=$monotonic $level: $message" 2>/dev/null || true
+    fi
 }

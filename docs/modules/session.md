@@ -26,6 +26,8 @@ Un errore visivo come colori separati o un handshake HDMI apparentemente pronto 
 
 Il modulo installa il profilo login, il supervisore, la policy e il selettore compatibile per le richieste live. Il boot hook valida gli artefatti; non introduce un secondo manager grafico systemd. La vecchia configurazione viene mantenuta da reinstallazione e rimozione normale; la rimozione con `--purge-config` può eliminarla.
 
+Le righe di log includono `boot_id`, `session_id` e `monotonic_ms`, così le richieste di cambio, il gate DRM e l'avvio del wrapper Gamescope si possono correlare nello stesso boot e nella stessa sessione. Il clock monotono deriva da `/proc/uptime` e ha risoluzione di 10 ms. La readiness del compositor e il primo frame visibile della UI Steam non sono dedotti dalla sola esistenza dei processi; per misurare il frame serve una registrazione video timestampata.
+
 ```bash
 cat /usr/local/libexec/ps5-cachyos-tools/session-policy
 tail -n 100 /home/steam/.gamescope-session.log

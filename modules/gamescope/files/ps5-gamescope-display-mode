@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Select the best connected DRM mode using the kernel's actual mode list."""
+
+import glob
+import os
+import re
+import subprocess
+import sys
+
+
+DRM_ROOT = os.environ.get("PS5_GAMESCOPE_DRM_SYSFS_ROOT", "/sys/class/drm")
+MODETEST = os.environ.get("PS5_GAMESCOPE_MODETEST", "modetest")
+
+
+def kernel_modes():
+    """Return connector modes as reported by DRM/KMS, including their Hz."""
+    env = os.environ.copy()
+    env["LC_ALL"] = "C"
+    try:
+        result = subprocess.run(
+            [MODETEST, "-M", "amdgpu", "-c"],
+            text=True,
+            capture_output=True,
+            timeout=10,
+            env=env,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"modetest non disponibile: {error}", file=sys.stderr)
+        return None
+    if result.returncode:
+        print(result.stderr.strip() or "modetest non ha enumerato i mode DRM", file=sys.stderr)
+        return None
+
+    connectors = {}
+    current = None
+    connector_line = re.compile(r"^\s*\d+\s+\d+\s+(connected|disconnected)\s+(\S+)")
+    mode_line = re.compile(r"^\s*#\d+\s+(\d{3,5})x(\d{3,5})\s+(\d+(?:\.\d+)?)\s")
+    for line in result.stdout.splitlines():
+        match = connector_line.match(line)
+        if match:
+            status, name = match.groups()
+            current = name if status == "connected" else None
+            if current:
+                connectors.setdefault(current, set())
+            continue
+        if not current:
+            continue
+        match = mode_line.match(line)
+        if not match:
+            continue
+        width, height = int(match.group(1)), int(match.group(2))
+        refresh = float(match.group(3))
+        if 320 <= width <= 7680 and 200 <= height <= 4320 and 24 <= refresh <= 240:
+            connectors[current].add((width, height, refresh))
+    return connectors
+
+
+def connected_modes():
+    for connector in glob.glob(os.path.join(DRM_ROOT, "card*-*")):
+        try:
+            with open(os.path.join(connector, "status")) as source:
+                if source.read().strip() != "connected":
+                    continue
+            modes = set()
+            with open(os.path.join(connector, "modes")) as source:
+                for line in source:
+                    match = re.fullmatch(r"\s*(\d{3,5})x(\d{3,5})\s*", line)
+                    if match:
+                        width, height = map(int, match.groups())
+                        if 320 <= width <= 7680 and 200 <= height <= 4320:
+                            modes.add((width, height))
+            if modes:
+                name = os.path.basename(connector).split("-", 1)[1]
+                yield name, modes
+        except OSError:
+            continue
+
+
+def main():
+    listed = kernel_modes()
+    candidates = []
+    preferred_connector = os.environ.get("PS5_GAMESCOPE_PREFERRED_CONNECTOR", "")
+    for name, sizes in connected_modes():
+        if preferred_connector and name != preferred_connector:
+            continue
+        actual_modes = listed.get(name, set()) if listed is not None else set()
+        for width, height in sizes:
+            rates = [rate for mw, mh, rate in actual_modes if (mw, mh) == (width, height)]
+            if listed is not None and (name not in listed or not rates):
+                # sysfs and the DRM API disagree about this size; don't invent its Hz.
+                continue
+            refresh = max(rates) if rates else 60.0
+            candidates.append((width * height, refresh, name, width, height))
+    if not candidates:
+        print("nessuna modalità DRM connessa valida", file=sys.stderr)
+        return 1
+    _, refresh, connector, width, height = max(
+        candidates,
+        key=lambda item: (item[0], item[1], item[3], item[2] in {"DP-1", "HDMI-A-1"}),
+    )
+    print(f"{width}\t{height}\t{round(refresh)}\t{connector}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

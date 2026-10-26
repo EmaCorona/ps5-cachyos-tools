@@ -1,0 +1,271 @@
+#!/usr/bin/env python3
+"""Select the highest progressive display mode advertised by KScreen or EDID."""
+
+import fcntl
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+
+KSCREEN = os.environ.get("PS5_KSCREEN_DOCTOR", "kscreen-doctor")
+DRM_ROOT = os.environ.get("PS5_KDE_DRM_SYSFS_ROOT", "/sys/class/drm")
+
+
+def log(message):
+    print("ps5-kde-display-mode: " + message, file=sys.stderr, flush=True)
+
+
+def kscreen_json(timeout=5):
+    result = subprocess.run([KSCREEN, "--json"], text=True, capture_output=True, timeout=timeout)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or "kscreen-doctor failed")
+    return json.loads(result.stdout)
+
+
+def parse_dtd(block, offset):
+    """Return (width, height, Hz) for an EDID detailed timing descriptor."""
+    descriptor = block[offset : offset + 18]
+    if len(descriptor) != 18:
+        return None
+    pixel_clock = int.from_bytes(descriptor[0:2], "little") * 10000
+    if not pixel_clock:
+        return None
+    width = descriptor[2] | ((descriptor[4] & 0xF0) << 4)
+    hblank = descriptor[3] | ((descriptor[4] & 0x0F) << 8)
+    height = descriptor[5] | ((descriptor[7] & 0xF0) << 4)
+    vblank = descriptor[6] | ((descriptor[7] & 0x0F) << 8)
+    if not width or not height or not hblank or not vblank:
+        return None
+    # Interlaced timings are skipped because KScreen's mode API expects a
+    # progressive refresh value and would otherwise apply half-frame rates.
+    if descriptor[17] & 0x80:
+        return None
+    hfront = descriptor[8] | ((descriptor[11] & 0xC0) << 2)
+    hsync = descriptor[9] | ((descriptor[11] & 0x30) << 4)
+    vfront = ((descriptor[10] >> 4) & 0x0F) | ((descriptor[11] & 0x0C) << 2)
+    vsync = (descriptor[10] & 0x0F) | ((descriptor[11] & 0x03) << 4)
+    hback = hblank - hfront - hsync
+    vback = vblank - vfront - vsync
+    # kscreen-doctor accepts only a CVT reduced-blanking preset, not the
+    # EDID's exact porches. Generate a missing mode only when its DTD itself
+    # uses CVT-RB v1 porch geometry, so we do not synthesize a TV-specific mode.
+    if not (hblank == 160 and hfront == 48 and hsync in (32, 64) and hback in (48, 80)):
+        return None
+    if not (vfront == 3 and vsync in (5, 10) and vback > 0):
+        return None
+    refresh = pixel_clock / ((width + hblank) * (height + vblank))
+    if not (320 <= width <= 7680 and 200 <= height <= 4320 and 24 <= refresh <= 240):
+        return None
+    return width, height, refresh, True
+
+
+def edid_modes(connector_name):
+    modes = set()
+    for path in glob.glob(os.path.join(DRM_ROOT, "card*-" + connector_name, "edid")):
+        try:
+            with open(path, "rb") as edid_file:
+                edid = edid_file.read()
+        except OSError:
+            continue
+        if len(edid) < 128 or edid[:8] != b"\x00\xff\xff\xff\xff\xff\xff\x00":
+            continue
+        block_count = edid[126] + 1
+        if len(edid) < block_count * 128:
+            continue
+        blocks = [edid[index : index + 128] for index in range(0, block_count * 128, 128)]
+        if any(sum(block) % 256 for block in blocks):
+            continue
+        for offset in range(54, 126, 18):
+            mode = parse_dtd(blocks[0], offset)
+            if mode:
+                modes.add(mode)
+        for block in blocks[1:]:
+            if block[0] != 0x02:  # CTA-861 extension detailed timings
+                continue
+            start = block[2]
+            if 4 <= start <= 109:
+                for offset in range(start, 127, 18):
+                    mode = parse_dtd(block, offset)
+                    if mode:
+                        modes.add(mode)
+    return modes
+
+
+def mode_key(mode):
+    return (mode["width"] * mode["height"], mode["refresh"])
+
+
+def listed_modes(output):
+    result = []
+    for mode in output.get("modes", []):
+        name = str(mode.get("name", "")).lower()
+        if mode.get("interlaced") is True or "interlaced" in name or re.search(r"\d+i(?:@|$)", name):
+            continue
+        size = mode.get("size", {})
+        try:
+            width, height = int(size["width"]), int(size["height"])
+            refresh = float(mode["refreshRate"])
+            mode_id = str(mode["id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if width > 0 and height > 0 and 1 <= refresh <= 1000:
+            result.append({"id": mode_id, "width": width, "height": height, "refresh": refresh})
+    return result
+
+
+def add_edid_best_mode(output, modes):
+    advertised = edid_modes(output["name"])
+    if not advertised:
+        return False
+    candidate = max(advertised, key=lambda item: (item[0] * item[1], item[2]))
+    width, height, refresh, _ = candidate
+    if any(
+        mode["width"] == width and mode["height"] == height and abs(mode["refresh"] - refresh) < 1.0
+        for mode in modes
+    ):
+        return False
+    refresh_millihz = round(refresh * 1000)
+    try:
+        result = subprocess.run(
+            [KSCREEN, f"output.{output['name']}.addCustomMode.{width}.{height}.{refresh_millihz}.reduced"],
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        log(f"{output['name']}: errore aggiungendo la modalità EDID: {error}")
+        return False
+    if result.returncode:
+        log(f"{output['name']}: impossibile aggiungere la modalità EDID {width}x{height}@{refresh:.2f} Hz")
+        return False
+    log(f"{output['name']}: modalità EDID aggiunta {width}x{height}@{refresh:.2f} Hz")
+    return True
+
+
+def restore_mode(output_name, mode_id):
+    if not mode_id:
+        return False
+    try:
+        result = subprocess.run(
+            [KSCREEN, f"output.{output_name}.mode.{mode_id}"],
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+        state = kscreen_json()
+        output = next((item for item in state.get("outputs", []) if item.get("name") == output_name), None)
+        restored = result.returncode == 0 and output is not None and str(output.get("currentModeId", "")) == mode_id
+        if not restored:
+            log(f"{output_name}: KScreen non ha confermato il ripristino della modalità precedente {mode_id}")
+        return restored
+    except (OSError, subprocess.TimeoutExpired) as error:
+        log(f"{output_name}: errore ripristinando la modalità precedente: {error}")
+        return False
+    except (RuntimeError, ValueError) as error:
+        log(f"{output_name}: stato non verificabile dopo il ripristino: {error}")
+        return False
+
+
+def main():
+    if os.environ.get("PS5_KDE_AUTO_DISPLAY_MODE", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return 0
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    lock_handle = None
+    if runtime_dir and os.path.isdir(runtime_dir):
+        lock_handle = open(os.path.join(runtime_dir, "ps5-kde-display-mode.lock"), "w")
+        try:
+            fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return 0
+
+    state = None
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            state = kscreen_json(timeout=min(1, max(0.1, deadline - time.monotonic())))
+            if any(output.get("connected") and output.get("enabled") for output in state.get("outputs", [])):
+                break
+        except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+            log(f"attendo KScreen: {error}")
+        time.sleep(min(0.5, max(0, deadline - time.monotonic())))
+    if not state:
+        return 0
+
+    for output in state.get("outputs", []):
+        if not output.get("connected") or not output.get("enabled") or not output.get("name"):
+            continue
+        modes = listed_modes(output)
+        if not modes:
+            continue
+        add_edid_best_mode(output, modes)
+        try:
+            refreshed = kscreen_json()
+        except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+            log(f"{output['name']}: non riesco a rileggere le modalità KScreen: {error}")
+            continue
+        current_output = next((item for item in refreshed.get("outputs", []) if item.get("name") == output["name"]), None)
+        if not current_output:
+            continue
+        available = listed_modes(current_output)
+        if not available:
+            continue
+        best = max(available, key=mode_key)
+        current_id = str(current_output.get("currentModeId", ""))
+        if best["id"] == current_id:
+            log(f"{output['name']}: già alla modalità massima {best['width']}x{best['height']}@{best['refresh']:.2f} Hz")
+            continue
+        try:
+            result = subprocess.run(
+                [KSCREEN, f"output.{output['name']}.mode.{best['id']}"],
+                text=True,
+                capture_output=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            log(f"{output['name']}: errore applicando la modalità migliore: {error}")
+            restore_mode(output["name"], current_id)
+            continue
+        if result.returncode:
+            log(f"{output['name']}: KScreen non ha applicato {best['width']}x{best['height']}@{best['refresh']:.2f} Hz")
+            restore_mode(output["name"], current_id)
+            continue
+        try:
+            applied_state = kscreen_json()
+            applied_output = next(
+                (item for item in applied_state.get("outputs", []) if item.get("name") == output["name"]), None
+            )
+            applied = next(
+                (mode for mode in listed_modes(applied_output or {}) if mode["id"] == best["id"]), None
+            )
+            is_applied = (
+                applied_output is not None
+                and str(applied_output.get("currentModeId", "")) == best["id"]
+                and applied is not None
+                and applied["width"] == best["width"]
+                and applied["height"] == best["height"]
+                and abs(applied["refresh"] - best["refresh"]) < 1.0
+            )
+        except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+            log(f"{output['name']}: verifica del cambio fallita: {error}")
+            is_applied = False
+        if not is_applied:
+            restored = current_id == best["id"] or restore_mode(output["name"], current_id)
+            if restored:
+                log(f"{output['name']}: modalità non confermata; ripristinata la precedente")
+            else:
+                log(f"{output['name']}: modalità non confermata e ripristino non verificato")
+            continue
+        log(f"{output['name']}: impostata {best['width']}x{best['height']}@{best['refresh']:.2f} Hz")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+        log(str(error))
+        sys.exit(0)

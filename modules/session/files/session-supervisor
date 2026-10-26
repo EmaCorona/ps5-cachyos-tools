@@ -5,6 +5,15 @@ common=${PS5_SESSION_COMMON:-/usr/local/libexec/ps5-cachyos-tools/session-common
 [[ -f "$common" && ! -L "$common" ]] || { printf 'session-common.sh mancante\n' >&2; exit 1; }
 # shellcheck source=/dev/null
 source "$common"
+if [[ ${1:-} == --session-child ]]; then
+    if [[ -z ${PS5_SESSION_ID:-} ]]; then
+        PS5_SESSION_ID="${PS5_SESSION_BOOT_ID:0:8}-$$"
+        export PS5_SESSION_ID
+    fi
+else
+    PS5_SESSION_ID="${PS5_SESSION_BOOT_ID:0:8}-$$"
+    export PS5_SESSION_ID
+fi
 supervisor_path=$(readlink -f -- "$0" 2>/dev/null || printf '%s' "$0")
 policy_bin="${supervisor_path%/*}/session-policy"
 drm_root=${PS5_DRM_SYSFS_ROOT:-/sys/class/drm}

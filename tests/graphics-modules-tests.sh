@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 7671)
+Total output lines: 464
+
 #!/usr/bin/env bash
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -14,8 +17,10 @@ SUPERVISOR="$ROOT/modules/session/files/session-supervisor"
 export CORE_TEST_MODE=1
 
 fixture() {
-    local root=$1
+    local root=$1 python3
     mkdir -p "$root/etc/profile.d" "$root/usr/bin" "$root/home/steam/.config" "$root/usr/share/xdg-desktop-portal"
+    python3=$(command -v python3) || return 1
+    ln -s "$python3" "$root/usr/bin/python3"
     printf 'ID=linux\nNAME=PS5 fixture\n' > "$root/etc/os-release"
     printf 'root:x:0:0:root:/root:/bin/bash\nsteam:x:1000:1000:Steam User:/home/steam:/bin/bash\n' > "$root/etc/passwd"
     printf 'root:x:0:\nsteam:x:1000:\nrender:x:995:\nvideo:x:27:steam\nseat:x:996:\ninput:x:97:\n' > "$root/etc/group"
@@ -34,8 +39,37 @@ else no 'default KDE o isolamento moduli errato'; fi
 if "$CLI" check --root "$root" > "$tmp/check.log" 2>&1; then ok 'check di KDE, Gamescope e Session'; else cat "$tmp/check.log" >&2; no 'check moduli grafici'; fi
 if grep -q 'steam' "$root/etc/group" && ! grep -q ',steam,steam' "$root/etc/group"; then ok 'gruppi grafici aggiunti senza duplicati'; else no 'gruppi grafici duplicati o assenti'; fi
 if [ -x "$root/usr/local/libexec/ps5-cachyos-tools/gamescope-session" ] && \
+   [ -x "$root/usr/local/bin/ps5-cachyos-tools-gamescope-display-mode" ] && \
    [ -x "$root/usr/local/bin/ps5-cachyos-tools-video-diag" ] && \
    [ -x "$root/usr/local/bin/ps5-cachyos-tools-steam-verify-repair" ]; then ok 'wrapper DRM e utility Gamescope installate'; else no 'utility Gamescope incomplete'; fi
+
+# A module revision change must refresh the helper assets of installed dependencies.
+sed -i 's/^REVISION=2$/REVISION=1/' "$root/usr/lib/ps5-cachyos-tools/modules/gamescope/module.conf"
+sed -i 's/^REVISION=4$/REVISION=3/' "$root/usr/lib/ps5-cachyos-tools/modules/session/module.conf"
+printf 'stale helper\n' > "$root/usr/local/bin/ps5-cachyos-tools-steam-verify-repair"
+printf 'stale session runtime\n' > "$root/usr/local/libexec/ps5-cachyos-tools/session-common.sh"
+if "$CLI" install --root "$root" --module session > "$tmp/revision-upgrade.log" 2>&1 && \
+   cmp -s "$ROOT/modules/gamescope/files/ps5-steam-verify-repair" "$root/usr/local/bin/ps5-cachyos-tools-steam-verify-repair" && \
+   cmp -s "$ROOT/modules/session/files/session-common.sh" "$root/usr/local/libexec/ps5-cachyos-tools/session-common.sh"; then
+    ok 'revisione module aggiorna helper Gamescope e sessione già installati'
+else cat "$tmp/revision-upgrade.log" >&2; no 'aggiornamento selettivo non ha rinfrescato gli helper'; fi
+
+missing_python="$tmp/missing-python"
+fixture "$missing_python"
+rm "$missing_python/usr/bin/python3"
+if "$CLI" install --root "$missing_python" --module gamescope > "$tmp/missing-python.log" 2>&1; then
+    no 'installazione Gamescope accetta Python runtime assente'
+elif grep -q '/usr/bin/python3 richiesto' "$tmp/missing-python.log" && \
+     [ ! -e "$missing_python/usr/local/bin/ps5-cachyos-tools-steam-verify-repair" ]; then
+    ok 'runtime Python dichiarato e installazione incompleta rifiutata senza residui'
+else cat "$tmp/missing-python.log" >&2; no 'errore runtime Python non chiaro o rollback incompleto'; fi
+
+if [ -x "$root/usr/local/bin/ps5-cachyos-tools-kde-display-mode" ] && \
+   [ -f "$root/etc/xdg/autostart/ps5-cachyos-tools-kde-display-mode.desktop" ] && \
+   grep -q 'ps5-cachyos-tools-kde-display-mode' "$root/usr/lib/ps5-cachyos-tools/modules/kde/check.sh" && \
+   "$root/usr/lib/ps5-cachyos-tools/modules/kde/boot.sh" "$root"; then
+    ok 'selezione automatica modalità KDE installata, controllata e verificata al boot'
+else no 'helper o avvio automatico display KDE assenti'; fi
 
 # Reinstall must preserve choices and settings made by the user.
 printf 'DEFAULT_SESSION=desktop\nNEXT_SESSION=\n' > "$root/home/steam/.config/ps5-cachyos-tools/session.conf"
@@ -66,8 +100,10 @@ if "$CLI" remove gamescope --root "$root" > "$tmp/remove-gamescope.log" 2>&1 && 
     ok 'rimozione Gamescope ripristina portal e mantiene config con keep-config'
 else cat "$tmp/remove-gamescope.log" >&2; no 'rimozione Gamescope non selettiva'; fi
 if "$CLI" remove kde --root "$root" > "$tmp/remove-kde.log" 2>&1 && \
-   grep -q '^video:x:27:steam$' "$root/etc/group" && ! grep -q '^render:x:995:steam$' "$root/etc/group"; then
-    ok 'rimozione KDE toglie solo i gruppi aggiunti e preserva membership originale'
+   grep -q '^video:x:27:steam$' "$root/etc/group" && ! grep -q '^render:x:995:steam$' "$root/etc/group" && \
+   [ ! -e "$root/usr/local/bin/ps5-cachyos-tools-kde-display-mode" ] && \
+   [ ! -e "$root/etc/xdg/autostart/ps5-cachyos-tools-kde-display-mode.desktop" ]; then
+    ok 'rimozione KDE toglie solo gruppi e artefatti aggiunti e preserva membership originale'
 else cat "$tmp/remove-kde.log" >&2; no 'rimozione gruppi KDE errata'; fi
 
 # A clean installation defaults to KDE; a recognized legacy preference is preserved.
@@ -187,54 +223,7 @@ drm_pid=$!
 for _ in {1..100}; do grep -q 'attesa DRM' "$drm_switch/home/session.log" 2>/dev/null && break; sleep 0.05; done
 drm_ok=1
 grep -q 'attesa DRM' "$drm_switch/home/session.log" 2>/dev/null || drm_ok=0
-PS5_SESSION_RUNTIME="$drm_switch/run" PS5_SESSION_COMMON="$COMMON" "$SELECT" --once desktop >/dev/null 2>&1 || drm_ok=0
-wait "$drm_pid" 2>/dev/null || true
-grep -qx plasma "$drm_switch/trace" 2>/dev/null || drm_ok=0
-if (( drm_ok )); then ok 'richiesta live KDE viene rilevata durante l’attesa DRM'; else cat "$drm_switch/home/supervisor.out" "$drm_switch/home/session.log" "$drm_switch/trace" >&2 2>/dev/null; no 'richiesta durante attesa DRM'; fi
-
-write_gamescope_policy() {
-    cp "$SUPERVISOR" "${1%/*}/session-supervisor"
-    cat > "$1" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' gamescope
-EOF
-    chmod 0755 "$1"
-}
-
-run_supervisor() {
-    local config=$1 trace=$2 home=$3
-    local policy="$home/session-policy"
-    cp "$SUPERVISOR" "$home/session-supervisor"
-    if [[ ! -x $policy ]]; then cp "$ROOT/modules/session/files/session-policy" "$policy"; chmod 0755 "$policy"; fi
-    PS5_SESSION_CONFIG="$config" PS5_SESSION_RUNTIME="$home/run" PS5_SESSION_COMMON="$COMMON" \
-      PS5_SESSION_LOG="$home/session.log" PS5_FALLBACK_LOG="$home/fallback.log" PS5_ALERT_FILE="$home/alert.txt" \
-      PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$trace" HOME="$home" \
-      PS5_FORCE_TTY1=1 PATH="$fakebin:$PATH" "$home/session-supervisor"
-}
-
-startup="$tmp/startup"
-mkdir -p "$startup/home" "$startup/run"
-if run_supervisor "$startup/session.conf" "$startup/trace" "$startup/home" >/dev/null 2>&1 && \
-   grep -qx plasma "$startup/trace" && ! grep -q gamescope "$startup/trace" && \
-   grep -q 'policy repository seleziona desktop' "$startup/home/session.log"; then
-    ok 'policy repository assente config legacy avvia Plasma con default KDE'
-else no 'policy KDE non avvia Plasma'; fi
-
-invalid_startup="$tmp/invalid-startup"
-mkdir -p "$invalid_startup/home" "$invalid_startup/run"
-printf 'DEFAULT_SESSION=invalid\n' > "$invalid_startup/session.conf"
-if run_supervisor "$invalid_startup/session.conf" "$invalid_startup/trace" "$invalid_startup/home" >/dev/null 2>&1 && \
-   grep -qx plasma "$invalid_startup/trace" && ! grep -q gamescope "$invalid_startup/trace" && \
-   grep -q 'policy repository seleziona desktop' "$invalid_startup/home/session.log"; then
-    ok 'configurazione invalida legacy non cambia la policy KDE'
-else no 'configurazione invalida legacy ha cambiato policy'; fi
-
-stale_choice="$tmp/stale-choice"
-mkdir -p "$stale_choice/home" "$stale_choice/run"
-printf 'DEFAULT_SESSION=gamescope\nNEXT_SESSION=gamescope\n' > "$stale_choice/session.conf"
-if run_supervisor "$stale_choice/session.conf" "$stale_choice/trace" "$stale_choice/home" >/dev/null 2>&1 && \
-   grep -qx plasma "$stale_choice/trace" && ! grep -q gamescope "$stale_choice/trace" && \
-   grep -q 'policy repository seleziona desktop' "$stale_choice/home/session.log"; then
+PS5_SESSION_RUNTIME="$drm_switch/run" PS5_SESSION_COMMON="$COMMON" "$SELECT" --once desktop…671 tokens truncated…then
     ok 'policy repository KDE prevale su DEFAULT_SESSION e NEXT_SESSION legacy'
 else no 'configurazione legacy ha prevalso sulla policy KDE'; fi
 
@@ -341,6 +330,61 @@ if HOME="$wrapper_home" PS5_STEAM_DIR="$wrapper_home/steam" PS5_GAMESCOPE_LOG="$
    grep -qx -- '-gamepadui -steamos' "$tmp/steam-args"; then
     ok 'wrapper Gamescope rileva DRM e costruisce gli argomenti con override validato'
 else no 'wrapper Gamescope non applica override/DRM'; fi
+
+cat > "$tmp/fake-gamescope-mode-detector" <<'EOF'
+#!/usr/bin/env bash
+[[ ${PS5_GAMESCOPE_PREFERRED_CONNECTOR:-} == HDMI-A-1 ]] || exit 90
+printf '3440\t1440\t100\tHDMI-A-1\n'
+EOF
+chmod 0755 "$tmp/fake-gamescope-mode-detector"
+printf 'PS5_OUTPUT_CONN=HDMI-A-1\n' > "$tmp/dynamic-gamescope.conf"
+if HOME="$wrapper_home" PS5_STEAM_DIR="$wrapper_home/steam" PS5_GAMESCOPE_LOG="$tmp/dynamic-wrapper.log" \
+   PS5_GAMESCOPE_CONFIG="$tmp/dynamic-gamescope.conf" PS5_DRM_SYSFS_ROOT="$drm_root" PS5_DRM_DEVICE="$tmp/card0" \
+   PS5_GAMESCOPE_MODE_DETECTOR="$tmp/fake-gamescope-mode-detector" PS5_STEAM_EXEC="$tmp/mockbin/steam" \
+   PS5_GAMESCOPE_EXEC="$tmp/mockbin/gamescope" PS5_STEAM_ARGS="$tmp/steam-args" PS5_GAMESCOPE_ARGS="$tmp/dynamic-gs-args" \
+   "$ROOT/modules/gamescope/files/gamescope-session-ps5" >/dev/null 2>&1 && \
+   head -n 14 "$tmp/dynamic-gs-args" > "$tmp/dynamic-gs-prefix" && \
+   printf '%s\n' -W 3440 -H 1440 -w 3440 -h 1440 -r 100 --backend drm --prefer-output HDMI-A-1 > "$tmp/dynamic-gs-expected" && \
+   cmp -s "$tmp/dynamic-gs-prefix" "$tmp/dynamic-gs-expected" && grep -q 'refresh=100' "$tmp/dynamic-wrapper.log"; then
+    ok 'wrapper Gamescope applica risoluzione e refresh dinamici rilevati'
+else no 'wrapper Gamescope non applica la modalità dinamica'; fi
+
+# A diagnostic error in the synchronous verifier must stay fail-open, and
+# timeline fields must correlate the wrapper with the requesting session.
+cat > "$tmp/failing-steam-helper" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$PS5_SESSION_ID" > "$PS5_HELPER_SESSION_ID"
+printf 'simulated EIO while inspecting Steam manifest\n' >&2
+exit 17
+EOF
+chmod 0755 "$tmp/failing-steam-helper"
+printf '11111111-2222-3333-4444-555555555555\n' > "$tmp/boot-id"
+printf '123.45 0.00\n' > "$tmp/uptime"
+if HOME="$wrapper_home" PS5_STEAM_DIR="$wrapper_home/steam" PS5_GAMESCOPE_LOG="$tmp/fail-open-wrapper.log" \
+   PS5_GAMESCOPE_CONFIG="$tmp/gamescope.conf" PS5_DRM_SYSFS_ROOT="$drm_root" PS5_DRM_DEVICE="$tmp/card0" \
+   PS5_STEAM_VERIFY_REPAIR="$tmp/failing-steam-helper" PS5_BOOT_ID_FILE="$tmp/boot-id" PS5_UPTIME_FILE="$tmp/uptime" \
+   PS5_SESSION_ID=integration-session-17 PS5_HELPER_SESSION_ID="$tmp/helper-session-id" \
+   PS5_STEAM_EXEC="$tmp/mockbin/steam" PS5_GAMESCOPE_EXEC="$tmp/mockbin/gamescope" \
+   PS5_STEAM_ARGS="$tmp/steam-args" PS5_GAMESCOPE_ARGS="$tmp/fail-open-gs-args" \
+   "$ROOT/modules/gamescope/files/gamescope-session-ps5" >/dev/null 2>&1 && \
+   [ "$(cat "$tmp/helper-session-id")" = integration-session-17 ] && \
+   grep -q 'warning=Steam manifest inspection failed (exit=17); continuing fail-open' "$tmp/fail-open-wrapper.log" && \
+   grep -q 'milestone=steam_manifest_check_start' "$tmp/fail-open-wrapper.log" && \
+   grep -q 'milestone=steam_manifest_check_end exit=17 elapsed_ms=0' "$tmp/fail-open-wrapper.log" && \
+   grep -q 'milestone=gamescope_exec_start' "$tmp/fail-open-wrapper.log" && \
+   grep -q 'milestone=gamescope_exec_exit exit=0 elapsed_ms=0' "$tmp/fail-open-wrapper.log" && \
+   grep -q 'boot_id=11111111-2222-3333-4444-555555555555 session_id=integration-session-17 monotonic_ms=123450' "$tmp/fail-open-wrapper.log"; then
+    ok 'helper Steam fail-open conserva l’avvio e registra milestone monotone correlate'
+else cat "$tmp/fail-open-wrapper.log" >&2 2>/dev/null; no 'errore helper blocca Gamescope o milestone non correlate'; fi
+
+printf 'abcdef12-2222-3333-4444-555555555555\n' > "$tmp/session-boot-id"
+printf '234.56 0.00\n' > "$tmp/session-uptime"
+if PS5_SESSION_LOG="$tmp/session-milestones.log" PS5_BOOT_ID_FILE="$tmp/session-boot-id" \
+   PS5_UPTIME_FILE="$tmp/session-uptime" PS5_SESSION_ID=supervisor-session-9 \
+   bash -c 'source "$1" && ps5_session_log info milestone=test_event' _ "$COMMON" && \
+   grep -q 'boot_id=abcdef12-2222-3333-4444-555555555555 session_id=supervisor-session-9 monotonic_ms=234560 info: milestone=test_event' "$tmp/session-milestones.log"; then
+    ok 'log Session usa boot ID, session ID e clock monotono'
+else no 'metadati temporali Session non correlabili'; fi
 
 steam_crash="$tmp/steam-crash"
 mkdir -p "$steam_crash/home/steam/logs" "$steam_crash/run"

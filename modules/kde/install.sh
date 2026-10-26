@@ -18,6 +18,8 @@ copy_asset() {
 copy_asset ps5-kde-environment.sh /etc/profile.d/ps5-kde-environment.sh 644 || exit 1
 copy_asset ps5-desktop-notify /usr/local/bin/ps5-cachyos-tools-desktop-notify 755 || exit 1
 copy_asset ps5-desktop-notify.desktop /etc/xdg/autostart/ps5-cachyos-tools-desktop-notify.desktop 644 || exit 1
+copy_asset ps5-kde-display-mode /usr/local/bin/ps5-cachyos-tools-kde-display-mode 755 || exit 1
+copy_asset ps5-kde-display-mode.desktop /etc/xdg/autostart/ps5-cachyos-tools-kde-display-mode.desktop 644 || exit 1
 
 group_file="$root/etc/group"
 added_file="$root/var/lib/ps5-cachyos-tools/kde/added-groups"

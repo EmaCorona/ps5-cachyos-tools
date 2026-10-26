@@ -26,4 +26,4 @@ if ! ps5_session_control_request_switch "$target"; then
     printf 'Supervisore Session non attivo o canale di controllo non disponibile; nessuna modifica al default di boot è stata salvata.\n' >&2
     exit 1
 fi
-ps5_session_log info "richiesta live=$target inviata al supervisore"
+ps5_session_log info "milestone=live_switch_request_accepted target=$target"

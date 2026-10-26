@@ -1,31 +1,263 @@
-#!/usr/bin/env bash
-set -u
-steam_dir=${1:-${PS5_STEAM_DIR:-${HOME:-/home/steam}/.local/share/Steam}}
-pkg_dir="$steam_dir/package"
-[[ -d "$pkg_dir" ]] || exit 0
-invalid=0
-for manifest in "$pkg_dir"/*.installed; do
-    [[ -f "$manifest" && ! -L "$manifest" ]] || continue
-    bad=0
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ -n "$line" ]] || continue
-        case "$line" in SIGNATURE:*|OSVER=*|VERSION=*|SHA1=*) continue;; esac
-        relative='' expected=''
-        if [[ "$line" == *','*';'* ]]; then
-            first=${line%%;*}; relative=${first%,*}; expected=${first##*,}
-        elif [[ "$line" == *size=* ]]; then
-            relative=${line%%$'\t'*}; expected=${line#*size=}; expected=${expected%%$'\t'*}
-        else
+#!/usr/bin/python3
+"""Validate Steam installed markers without forking once per manifest entry."""
+
+from __future__ import annotations
+
+import errno
+import os
+import re
+import stat
+import sys
+import time
+
+
+_METADATA_PREFIXES = ("SIGNATURE:", "OSVER=", "VERSION=", "SHA1=")
+_EXPECTED_SIZE = re.compile(r"^[0-9]+$")
+
+
+def _record(line: str) -> tuple[str, str] | None:
+    """Return (relative path, expected size) for a supported manifest row."""
+    if not line or line.startswith(_METADATA_PREFIXES):
+        return None
+
+    if "," in line and ";" in line and line.index(",") < line.index(";"):
+        first = line.split(";", 1)[0]
+        relative, separator, expected = first.rpartition(",")
+        if not separator:
+            return None
+    elif "size=" in line:
+        relative = line.split("\t", 1)[0]
+        expected = line.split("size=", 1)[1].split("\t", 1)[0]
+    else:
+        return None
+
+    if (
+        relative.startswith("/")
+        or "/../" in f"/{relative}/"
+        or "\x00" in relative
+        or not _EXPECTED_SIZE.fullmatch(expected)
+    ):
+        return None
+    return relative, expected
+
+
+def _boot_id() -> str:
+    path = os.environ.get("PS5_BOOT_ID_FILE", "/proc/sys/kernel/random/boot_id")
+    try:
+        with open(path, "r", encoding="ascii") as stream:
+            value = stream.readline().strip()
+    except OSError:
+        return "unknown"
+    return value if re.fullmatch(r"[0-9a-fA-F-]{8,64}", value) else "unknown"
+
+
+def _warn(message: str) -> None:
+    print(f"Avviso verifica manifesti Steam: {message}", file=sys.stderr)
+
+
+def _inspect_manifest(pkg_dir: str, name: str, fd: int, identity: os.stat_result,
+                      counts: dict[str, int], candidates: list[tuple[str, os.stat_result]]) -> bool:
+    """Scan one already-open regular manifest; return whether inspection failed."""
+    bad = False
+    failed = False
+    try:
+        with os.fdopen(fd, "r", encoding="utf-8", errors="surrogateescape", newline="") as stream:
+            opened = os.fstat(stream.fileno())
+            if (opened.st_dev, opened.st_ino) != (identity.st_dev, identity.st_ino):
+                _warn(f"manifesto {name}: file cambiato durante l'apertura; marker conservato")
+                return True
+            if not stat.S_ISREG(opened.st_mode):
+                return False
+            for line_number, raw in enumerate(stream, 1):
+                line = raw[:-1] if raw.endswith("\n") else raw
+                parsed = _record(line)
+                if parsed is None:
+                    continue
+                relative, expected = parsed
+                counts["records"] += 1
+                path = os.path.join(os.path.dirname(pkg_dir), relative)
+                try:
+                    actual_size = os.stat(path).st_size
+                    counts["files"] += 1
+                except OSError as exc:
+                    if exc.errno == errno.ENOENT:
+                        bad = True
+                        continue
+                    counts["errors"] += 1
+                    failed = True
+                    _warn(
+                        f"manifesto {name}, riga {line_number}: ispezione fallita "
+                        f"({errno.errorcode.get(exc.errno, 'EIO')}); marker conservato"
+                    )
+                    continue
+                # Preserve the historical textual comparison (for example, a
+                # size written with leading zeroes remains a mismatch).
+                if str(actual_size) != expected:
+                    bad = True
+    except OSError as exc:
+        counts["errors"] += 1
+        failed = True
+        _warn(
+            f"manifesto {name}: lettura fallita "
+            f"({errno.errorcode.get(exc.errno, 'EIO')}); marker conservato"
+        )
+    if bad and not failed:
+        candidates.append((name, identity))
+    return failed
+
+
+def run(steam_dir: str) -> int:
+    started_ns = time.monotonic_ns()
+    counts = {"manifests": 0, "records": 0, "files": 0, "errors": 0}
+    candidates: list[tuple[str, os.stat_result]] = []
+    pkg_dir = os.path.join(steam_dir, "package")
+
+    try:
+        package_info = os.stat(pkg_dir)
+    except FileNotFoundError as exc:
+        if exc.errno == errno.ENOENT:
+            return 0
+        _warn(f"directory package non ispezionabile ({errno.errorcode.get(exc.errno, 'EIO')})")
+        return 1
+    except OSError as exc:
+        _warn(f"directory package non ispezionabile ({errno.errorcode.get(exc.errno, 'EIO')})")
+        return 1
+    if not stat.S_ISDIR(package_info.st_mode):
+        return 0
+
+    try:
+        with os.scandir(pkg_dir) as entries:
+            names = sorted(
+                entry.name for entry in entries
+                if not entry.name.startswith(".") and entry.name.endswith(".installed")
+            )
+    except OSError as exc:
+        _warn(f"directory package non leggibile ({errno.errorcode.get(exc.errno, 'EIO')})")
+        return 1
+
+    inspection_failed = False
+    for name in names:
+        path = os.path.join(pkg_dir, name)
+        try:
+            fd = os.open(
+                path,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0),
+            )
+        except FileNotFoundError as exc:
+            if exc.errno == errno.ENOENT:
+                continue
+            counts["errors"] += 1
+            inspection_failed = True
+            _warn(f"manifesto {name}: apertura fallita ({errno.errorcode.get(exc.errno, 'EIO')})")
             continue
-        fi
-        [[ "$relative" != /* && "/$relative/" != *'/../'* && "$expected" =~ ^[0-9]+$ ]] || continue
-        actual=$(stat -c %s -- "$steam_dir/$relative" 2>/dev/null || echo missing)
-        if [[ "$actual" != "$expected" ]]; then bad=1; break; fi
-    done < "$manifest"
-    if (( bad )); then
-        printf 'Steam manifest non integro: %s; rimozione del solo marker .installed per consentire la verifica Steam.\n' "${manifest##*/}" >&2
-        rm -f -- "$manifest" || exit 1
-        invalid=$((invalid + 1))
-    fi
-done
-printf 'Manifest Steam non validi rilevati: %s\n' "$invalid"
+        except OSError as exc:
+            # A symlink manifest has always been ignored by the shell helper.
+            if exc.errno == errno.ELOOP:
+                continue
+            counts["errors"] += 1
+            inspection_failed = True
+            _warn(f"manifesto {name}: apertura fallita ({errno.errorcode.get(exc.errno, 'EIO')})")
+            continue
+
+        try:
+            identity = os.fstat(fd)
+        except OSError as exc:
+            os.close(fd)
+            counts["errors"] += 1
+            inspection_failed = True
+            _warn(f"manifesto {name}: metadati non leggibili ({errno.errorcode.get(exc.errno, 'EIO')})")
+            continue
+        if not stat.S_ISREG(identity.st_mode):
+            os.close(fd)
+            continue
+        counts["manifests"] += 1
+        if _inspect_manifest(pkg_dir, name, fd, identity, counts, candidates):
+            inspection_failed = True
+
+    # Do not change any Steam marker when even one relevant inspection has an
+    # unknown result. The normal wrapper remains fail-open and can retry later.
+    invalid = 0
+    if not inspection_failed and candidates:
+        try:
+            directory_fd = os.open(pkg_dir, os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY)
+        except OSError as exc:
+            counts["errors"] += 1
+            inspection_failed = True
+            _warn(f"directory package cambiata prima del recovery ({errno.errorcode.get(exc.errno, 'EIO')})")
+        else:
+            try:
+                current: list[str] = []
+                for name, identity in candidates:
+                    try:
+                        latest = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                    except FileNotFoundError as exc:
+                        if exc.errno == errno.ENOENT:
+                            continue
+                        counts["errors"] += 1
+                        inspection_failed = True
+                        break
+                    except OSError:
+                        counts["errors"] += 1
+                        inspection_failed = True
+                        break
+                    if (
+                        not stat.S_ISREG(latest.st_mode)
+                        or (latest.st_dev, latest.st_ino) != (identity.st_dev, identity.st_ino)
+                    ):
+                        counts["errors"] += 1
+                        inspection_failed = True
+                        _warn(f"manifesto {name} cambiato durante il controllo; marker conservato")
+                        break
+                    current.append(name)
+
+                if not inspection_failed:
+                    for name in current:
+                        try:
+                            os.unlink(name, dir_fd=directory_fd)
+                        except FileNotFoundError as exc:
+                            if exc.errno == errno.ENOENT:
+                                continue
+                            counts["errors"] += 1
+                            inspection_failed = True
+                            _warn(f"marker {name}: rimozione fallita ({errno.errorcode.get(exc.errno, 'EIO')})")
+                            break
+                        except OSError as exc:
+                            counts["errors"] += 1
+                            inspection_failed = True
+                            _warn(f"marker {name}: rimozione fallita ({errno.errorcode.get(exc.errno, 'EIO')})")
+                            break
+                        invalid += 1
+            finally:
+                os.close(directory_fd)
+
+    # Keep the legacy summary's count meaningful: a marker is counted only
+    # after its unlink completed successfully.
+    print(f"Manifest Steam non validi rilevati: {invalid}")
+
+    elapsed_ms = (time.monotonic_ns() - started_ns) / 1_000_000
+    boot_id = _boot_id()
+    session_id = os.environ.get("PS5_SESSION_ID", f"standalone-{os.getpid()}")
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", session_id):
+        session_id = "unknown"
+    print(
+        "steam_verify_repair: "
+        f"boot_id={boot_id} session_id={session_id} "
+        f"manifests={counts['manifests']} records={counts['records']} "
+        f"files={counts['files']} invalid={invalid} errors={counts['errors']} "
+        f"elapsed_ms={elapsed_ms:.3f}",
+        file=sys.stderr,
+    )
+    return 1 if inspection_failed else 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if len(args) > 1:
+        print("Uso: ps5-cachyos-tools-steam-verify-repair [STEAM_DIR]", file=sys.stderr)
+        return 2
+    steam_dir = args[0] if args else os.environ.get("PS5_STEAM_DIR", os.path.expanduser("~/.local/share/Steam"))
+    return run(steam_dir)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

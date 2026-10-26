@@ -3,6 +3,10 @@ set -u
 root=$1
 repo=${CORE_REPO:?}
 source "$root/usr/lib/ps5-cachyos-tools/core/target.sh" || exit 1
+if [ ! -x "$root/usr/bin/python3" ]; then
+    printf 'dipendenza Gamescope mancante: /usr/bin/python3 richiesto per la verifica in-process dei manifesti Steam\n' >&2
+    exit 1
+fi
 for dir in /etc/ps5-cachyos-tools /usr/local/bin /usr/local/libexec/ps5-cachyos-tools /usr/share/xdg-desktop-portal /var/lib/ps5-cachyos-tools/gamescope/originals; do
     core_target_prepare_dir "$root" "$dir" >/dev/null || exit 1
 done
@@ -12,6 +16,7 @@ copy_asset() {
     core_target_copy_file "$root" "$destination" "$source" && core_target_chmod "$root" "$destination" "$mode"
 }
 copy_asset gamescope-session-ps5 /usr/local/libexec/ps5-cachyos-tools/gamescope-session 755 || exit 1
+copy_asset ps5-gamescope-display-mode /usr/local/bin/ps5-cachyos-tools-gamescope-display-mode 755 || exit 1
 copy_asset ps5-video-diag /usr/local/bin/ps5-cachyos-tools-video-diag 755 || exit 1
 copy_asset ps5-steam-verify-repair /usr/local/bin/ps5-cachyos-tools-steam-verify-repair 755 || exit 1
 copy_asset ps5-drm-setup /usr/local/bin/ps5-cachyos-tools-drm-setup 755 || exit 1
