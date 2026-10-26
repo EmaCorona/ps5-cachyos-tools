@@ -86,6 +86,7 @@ core_service_reapply() {
     [ "$root" = / ] || return 1
     unit=$(core_registry_field "$id" 7); [ -n "$unit" ] || return 1
     policy=$(core_registry_field "$id" 3); revision=$(core_registry_field "$id" 5); boot=$(core_state_boot_id)
+    core_target_prepare_dir "$run_root" /run/ps5-cachyos-tools >/dev/null || return 1
     if declare -F core_txn_lock >/dev/null 2>&1; then core_txn_lock "$run_root" || return 1; fi
     local run_dir="$run_root/run/ps5-cachyos-tools" run_fd expected_run actual_run
     [ -d "$run_dir" ] && [ ! -L "$run_dir" ] || return 1

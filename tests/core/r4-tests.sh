@@ -61,6 +61,21 @@ else
     no 'fixture fan R4 non installabile'
 fi
 
+framework_remove="$tmp/framework-remove"; mkdir -p "$framework_remove/etc"; printf 'ID=linux\nNAME=framework-remove\n' > "$framework_remove/etc/os-release"
+if "$repo/bin/ps5-cachyos-tools" install --root "$framework_remove" --module fan >/dev/null 2>&1; then
+    rm -f -- "$framework_remove/etc/systemd/system/multi-user.target.wants/ps5-fan-daemon.service"
+    source "$repo/bin/ps5-cachyos-tools" list >/dev/null 2>&1 || true
+    if CORE_KEEP_CONFIG=0 core_cli_run_remove_hook "$framework_remove" fan \
+        "$framework_remove/usr/lib/ps5-cachyos-tools/modules/fan/remove.sh" 0 >/dev/null 2>&1 && \
+            [ ! -e "$framework_remove/etc/ps5-fan/fan.conf" ] && [ -f "$framework_remove/etc/ps5-fan/.ps5-cachyos-tools.manifest" ]; then
+        ok 'remove framework gestisce il service già disabilitato prima dell hook'
+    else
+        no 'remove framework fallisce dopo la disabilitazione del service'
+    fi
+else
+    no 'fixture remove framework non installabile'
+fi
+
 remove_target="$tmp/remove-target"; remove_link="$tmp/remove-link"
 mkdir -p "$remove_target/etc"; printf 'ID=linux\nNAME=r4\n' > "$remove_target/etc/os-release"
 if "$repo/bin/ps5-cachyos-tools" install --root "$remove_target" --module fan >/dev/null 2>&1; then
