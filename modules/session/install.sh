@@ -29,6 +29,7 @@ preserve_and_install ps5-tty-session.sh /etc/profile.d/ps5-tty-session.sh 644 pr
 preserve_and_install steamos-session-select /usr/bin/steamos-session-select 755 selector || exit 1
 copy_asset session-common.sh /usr/local/libexec/ps5-cachyos-tools/session-common.sh 644 || exit 1
 copy_asset session-supervisor /usr/local/libexec/ps5-cachyos-tools/session-supervisor 755 || exit 1
+copy_asset session-policy /usr/local/libexec/ps5-cachyos-tools/session-policy 755 || exit 1
 
 config="$root/home/steam/.config/ps5-cachyos-tools/session.conf"
 [ -d "$root/home/steam" ] && [ ! -L "$root/home/steam" ] || exit 1

@@ -46,6 +46,13 @@ if "$CLI" install --root "$root" --module session > "$tmp/reinstall.log" 2>&1 &&
     ok 'reinstallazione idempotente preserva le configurazioni'
 else cat "$tmp/reinstall.log" >&2; no 'reinstallazione ha sovrascritto configurazioni'; fi
 
+legacy_config="$root/home/steam/.config/ps5-cachyos-tools/session.conf"
+mv "$legacy_config" "$legacy_config.saved"
+if "$CLI" check --root "$root" --module session >/dev/null 2>&1; then
+    ok 'check Session non dipende più dal file session.conf legacy'
+else no 'check Session richiede ancora session.conf'; fi
+mv "$legacy_config.saved" "$legacy_config"
+
 if "$CLI" remove gamescope --root "$root" > "$tmp/blocked.log" 2>&1; then no 'rimozione dipendenza Gamescope mentre Session è installato'; else ok 'framework blocca la rimozione di una dipendenza usata'; fi
 if "$CLI" remove session --root "$root" > "$tmp/remove-session.log" 2>&1 && \
    grep -qx 'old profile' "$root/etc/profile.d/ps5-tty-session.sh" && \
@@ -80,7 +87,7 @@ if "$CLI" install --root "$legacy_gamescope_root" --module session >/dev/null 2>
     ok 'migrazione conserva una preferenza Gamescope legacy esplicita'
 else no 'preferenza Gamescope legacy non preservata'; fi
 
-# Selector keeps persistent and one-shot preferences separate and rejects invalid input.
+# Legacy selector must not alter boot policy or terminate a running session.
 fakebin="$tmp/fakebin"
 mkdir -p "$fakebin"
 cat > "$fakebin/systemctl" <<'EOF'
@@ -100,32 +107,14 @@ chmod 0755 "$fakebin"/*
 session_config="$tmp/selector/session.conf"
 session_runtime="$tmp/selector/run"
 mkdir -p "${session_config%/*}"
-printf 'DEFAULT_SESSION=gamescope\nNEXT_SESSION=\n' > "$session_config"
-missing_selector_config="$tmp/selector/missing-session.conf"
-if PS5_SESSION_CONFIG="$missing_selector_config" PS5_SESSION_RUNTIME="$session_runtime" PS5_SESSION_COMMON="$COMMON" PATH="$fakebin:$PATH" "$SELECT" --once gamescope >/dev/null 2>&1 && \
-   grep -qx 'DEFAULT_SESSION=desktop' "$missing_selector_config" && grep -qx 'NEXT_SESSION=gamescope' "$missing_selector_config"; then
-    ok 'selettore usa KDE come default quando la configurazione manca'
-else no 'selettore non usa KDE come default con configurazione assente'; fi
-if PS5_SESSION_CONFIG="$session_config" PS5_SESSION_RUNTIME="$session_runtime" PS5_SESSION_COMMON="$COMMON" PATH="$fakebin:$PATH" "$SELECT" --once desktop >/dev/null 2>&1 && \
-   grep -qx 'DEFAULT_SESSION=gamescope' "$session_config" && grep -qx 'NEXT_SESSION=desktop' "$session_config"; then
-    ok 'switch one-shot non modifica il default persistente'
-else no 'switch one-shot sovrascrive il default'; fi
-if PS5_SESSION_CONFIG="$session_config" PS5_SESSION_RUNTIME="$session_runtime" PS5_SESSION_COMMON="$COMMON" PATH="$fakebin:$PATH" "$SELECT" --default plasma >/dev/null 2>&1 && \
-   grep -qx 'DEFAULT_SESSION=desktop' "$session_config" && grep -qx 'NEXT_SESSION=desktop' "$session_config"; then
-    ok 'alias plasma resta compatibile e seleziona il default KDE'
-else no 'alias sessione legacy non rispettato'; fi
-command_trace="$tmp/kde-to-gamescope.commands"
-if XDG_CURRENT_DESKTOP=KDE XDG_SESSION_ID=42 PS5_COMMAND_TRACE="$command_trace" PS5_SESSION_CONFIG="$session_config" \
-   PS5_SESSION_RUNTIME="$session_runtime" PS5_SESSION_COMMON="$COMMON" PATH="$fakebin:$PATH" "$SELECT" --default gamescope >/dev/null 2>&1 && \
-   grep -qx 'DEFAULT_SESSION=gamescope' "$session_config" && grep -qx 'NEXT_SESSION=gamescope' "$session_config"; then
-    if grep -q 'systemctl --user stop plasma-workspace-wayland.target' "$command_trace" && \
-       grep -q 'pkill -TERM .* -x plasmashell' "$command_trace" && \
-       grep -q 'pkill -TERM .* -x kwin_wayland' "$command_trace" && \
-       grep -q 'loginctl terminate-session 42' "$command_trace"; then
-        ok 'switch persistente KDE→Gamescope aggiorna preferenza e chiude Plasma/sessione corrente'
-    else no 'switch KDE→Gamescope non arresta Plasma e sessione corrente'; fi
-else no 'switch persistente da KDE a Gamescope non applicato'; fi
-if PS5_SESSION_CONFIG="$session_config" PS5_SESSION_RUNTIME="$session_runtime" PS5_SESSION_COMMON="$COMMON" PATH="$fakebin:$PATH" "$SELECT" invalid >/dev/null 2>&1; then no 'selettore accetta un target invalido'; else ok 'selettore rifiuta target non supportato'; fi
+printf 'DEFAULT_SESSION=gamescope\nNEXT_SESSION=gamescope\n' > "$session_config"
+command_trace="$tmp/selector/commands"
+if PS5_COMMAND_TRACE="$command_trace" PS5_SESSION_CONFIG="$session_config" PS5_SESSION_RUNTIME="$session_runtime" \
+   PS5_SESSION_COMMON="$COMMON" PATH="$fakebin:$PATH" "$SELECT" --default desktop >/dev/null 2>&1 && \
+   grep -qx 'DEFAULT_SESSION=gamescope' "$session_config" && grep -qx 'NEXT_SESSION=gamescope' "$session_config" && \
+   [ ! -s "$command_trace" ]; then
+    ok 'steamos-session-select è inerte: non modifica preferenze né termina sessioni'
+else no 'selettore legacy ha modificato config o processi'; fi
 
 plasma="$tmp/startplasma-wayland"
 cat > "$plasma" <<'EOF'
@@ -142,30 +131,67 @@ exit "${FAKE_GAMESCOPE_RC:-0}"
 EOF
 chmod 0755 "$plasma" "$gamescope_mock"
 
+write_gamescope_policy() {
+    cp "$SUPERVISOR" "${1%/*}/session-supervisor"
+    cat > "$1" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' gamescope
+EOF
+    chmod 0755 "$1"
+}
+
 run_supervisor() {
     local config=$1 trace=$2 home=$3
+    local policy="$home/session-policy"
+    cp "$SUPERVISOR" "$home/session-supervisor"
+    if [[ ! -x $policy ]]; then cp "$ROOT/modules/session/files/session-policy" "$policy"; chmod 0755 "$policy"; fi
     PS5_SESSION_CONFIG="$config" PS5_SESSION_RUNTIME="$home/run" PS5_SESSION_COMMON="$COMMON" \
       PS5_SESSION_LOG="$home/session.log" PS5_FALLBACK_LOG="$home/fallback.log" PS5_ALERT_FILE="$home/alert.txt" \
       PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$trace" HOME="$home" \
-      PS5_FORCE_TTY1=1 PATH="$fakebin:$PATH" "$SUPERVISOR"
+      PS5_FORCE_TTY1=1 PATH="$fakebin:$PATH" "$home/session-supervisor"
 }
 
 startup="$tmp/startup"
 mkdir -p "$startup/home" "$startup/run"
 if run_supervisor "$startup/session.conf" "$startup/trace" "$startup/home" >/dev/null 2>&1 && \
    grep -qx plasma "$startup/trace" && ! grep -q gamescope "$startup/trace" && \
-   grep -q 'uso KDE come default' "$startup/home/session.log"; then
-    ok 'configurazione assente avvia Plasma con KDE come default'
-else no 'configurazione assente non avvia KDE come default'; fi
+   grep -q 'policy repository seleziona desktop' "$startup/home/session.log"; then
+    ok 'policy repository assente config legacy avvia Plasma con default KDE'
+else no 'policy KDE non avvia Plasma'; fi
 
 invalid_startup="$tmp/invalid-startup"
 mkdir -p "$invalid_startup/home" "$invalid_startup/run"
 printf 'DEFAULT_SESSION=invalid\n' > "$invalid_startup/session.conf"
 if run_supervisor "$invalid_startup/session.conf" "$invalid_startup/trace" "$invalid_startup/home" >/dev/null 2>&1 && \
    grep -qx plasma "$invalid_startup/trace" && ! grep -q gamescope "$invalid_startup/trace" && \
-   grep -q 'uso KDE come default' "$invalid_startup/home/session.log"; then
-    ok 'configurazione invalida avvia Plasma con KDE come default'
-else no 'configurazione invalida non usa il default KDE'; fi
+   grep -q 'policy repository seleziona desktop' "$invalid_startup/home/session.log"; then
+    ok 'configurazione invalida legacy non cambia la policy KDE'
+else no 'configurazione invalida legacy ha cambiato policy'; fi
+
+stale_choice="$tmp/stale-choice"
+mkdir -p "$stale_choice/home" "$stale_choice/run"
+printf 'DEFAULT_SESSION=gamescope\nNEXT_SESSION=gamescope\n' > "$stale_choice/session.conf"
+if run_supervisor "$stale_choice/session.conf" "$stale_choice/trace" "$stale_choice/home" >/dev/null 2>&1 && \
+   grep -qx plasma "$stale_choice/trace" && ! grep -q gamescope "$stale_choice/trace" && \
+   grep -q 'policy repository seleziona desktop' "$stale_choice/home/session.log"; then
+    ok 'policy repository KDE prevale su DEFAULT_SESSION e NEXT_SESSION legacy'
+else no 'configurazione legacy ha prevalso sulla policy KDE'; fi
+
+for policy_state in missing invalid; do
+    policy_case="$tmp/policy-$policy_state"
+    mkdir -p "$policy_case/home" "$policy_case/run"
+    cp "$SUPERVISOR" "$policy_case/home/session-supervisor"
+    if [[ $policy_state == invalid ]]; then
+        printf '#!/usr/bin/env bash\nprintf unknown\n' > "$policy_case/home/session-policy"
+        chmod 0755 "$policy_case/home/session-policy"
+    fi
+    if PS5_SESSION_CONFIG="$policy_case/session.conf" PS5_SESSION_RUNTIME="$policy_case/run" PS5_SESSION_COMMON="$COMMON" \
+       PS5_SESSION_LOG="$policy_case/home/session.log" PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" \
+       PS5_TRACE="$policy_case/trace" HOME="$policy_case/home" PS5_FORCE_TTY1=1 PATH="$fakebin:$PATH" \
+       "$policy_case/home/session-supervisor" >/dev/null 2>&1 && grep -qx plasma "$policy_case/trace" && ! grep -q gamescope "$policy_case/trace"; then
+        ok "policy $policy_state ricade su KDE"
+    else no "policy $policy_state non ricade su KDE"; fi
+done
 
 drm_root="$tmp/drm"
 mkdir -p "$drm_root/card0-DP-1"
@@ -176,11 +202,12 @@ touch "$tmp/card0"
 timeout_case="$tmp/timeout"
 mkdir -p "$timeout_case/home" "$timeout_case/drm"
 printf 'DEFAULT_SESSION=gamescope\nNEXT_SESSION=\n' > "$timeout_case/session.conf"
+write_gamescope_policy "$timeout_case/home/session-policy"
 if PS5_SESSION_CONFIG="$timeout_case/session.conf" PS5_SESSION_RUNTIME="$timeout_case/run" PS5_SESSION_COMMON="$COMMON" \
    PS5_SESSION_LOG="$timeout_case/home/session.log" PS5_FALLBACK_LOG="$timeout_case/home/fallback.log" PS5_ALERT_FILE="$timeout_case/home/alert.txt" \
    PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$timeout_case/trace" HOME="$timeout_case/home" \
    PS5_FORCE_TTY1=1 PS5_DRM_SYSFS_ROOT="$timeout_case/drm" PS5_DRM_DEVICE="$timeout_case/no-card" PS5_SESSION_DRM_READY_TIMEOUT_SEC=1 \
-   PS5_SESSION_DRM_POLL_INTERVAL_SEC=0.1 PS5_SESSION_DRM_STABLE_SAMPLES=1 PATH="$fakebin:$PATH" "$SUPERVISOR" >/dev/null 2>&1 && \
+   PS5_SESSION_DRM_POLL_INTERVAL_SEC=0.1 PS5_SESSION_DRM_STABLE_SAMPLES=1 PATH="$fakebin:$PATH" "$timeout_case/home/session-supervisor" >/dev/null 2>&1 && \
    grep -qx plasma "$timeout_case/trace" && grep -q 'DRM non pronto' "$timeout_case/home/fallback.log" && \
    grep -qx 'DEFAULT_SESSION=gamescope' "$timeout_case/session.conf"; then
     ok 'timeout DRM avvia KDE senza sovrascrivere il default'
@@ -189,10 +216,11 @@ else no 'fallback timeout DRM'; fi
 failure="$tmp/failure"
 mkdir -p "$failure/home" "$failure/run"
 printf 'DEFAULT_SESSION=gamescope\nNEXT_SESSION=\n' > "$failure/session.conf"
+write_gamescope_policy "$failure/home/session-policy"
 if PS5_SESSION_CONFIG="$failure/session.conf" PS5_SESSION_RUNTIME="$failure/run" PS5_SESSION_COMMON="$COMMON" \
    PS5_SESSION_LOG="$failure/home/session.log" PS5_FALLBACK_LOG="$failure/home/fallback.log" PS5_ALERT_FILE="$failure/home/alert.txt" \
    PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$failure/trace" HOME="$failure/home" \
-   PS5_FORCE_TTY1=1 PS5_SESSION_SKIP_DRM_WAIT=1 FAKE_GAMESCOPE_RC=42 PATH="$fakebin:$PATH" "$SUPERVISOR" >/dev/null 2>&1 && \
+   PS5_FORCE_TTY1=1 PS5_SESSION_SKIP_DRM_WAIT=1 FAKE_GAMESCOPE_RC=42 PATH="$fakebin:$PATH" "$failure/home/session-supervisor" >/dev/null 2>&1 && \
    printf 'gamescope\nplasma\n' > "$failure/expected" && cmp -s "$failure/expected" "$failure/trace" && grep -q 'exit=42' "$failure/home/fallback.log" && \
    grep -qx 'DEFAULT_SESSION=gamescope' "$failure/session.conf" && [ -f "$failure/home/alert.txt" ]; then
     ok 'crash Gamescope pulisce la sessione, registra causa e avvia KDE'
@@ -201,10 +229,11 @@ else no 'fallback crash Gamescope'; fi
 missing="$tmp/missing-wrapper"
 mkdir -p "$missing/home" "$missing/run"
 printf 'DEFAULT_SESSION=gamescope\nNEXT_SESSION=\n' > "$missing/session.conf"
+write_gamescope_policy "$missing/home/session-policy"
 if PS5_SESSION_CONFIG="$missing/session.conf" PS5_SESSION_RUNTIME="$missing/run" PS5_SESSION_COMMON="$COMMON" \
    PS5_SESSION_LOG="$missing/home/session.log" PS5_FALLBACK_LOG="$missing/home/fallback.log" PS5_ALERT_FILE="$missing/home/alert.txt" \
    PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$missing/not-installed" PS5_TRACE="$missing/trace" HOME="$missing/home" \
-   PS5_FORCE_TTY1=1 PS5_SESSION_SKIP_DRM_WAIT=1 PATH="$fakebin:$PATH" "$SUPERVISOR" >/dev/null 2>&1 && \
+   PS5_FORCE_TTY1=1 PS5_SESSION_SKIP_DRM_WAIT=1 PATH="$fakebin:$PATH" "$missing/home/session-supervisor" >/dev/null 2>&1 && \
    grep -qx plasma "$missing/trace" && grep -q 'wrapper assente' "$missing/home/fallback.log" && \
    grep -qx 'DEFAULT_SESSION=gamescope' "$missing/session.conf"; then
     ok 'wrapper Gamescope assente avvia KDE e conserva il default'
@@ -212,40 +241,17 @@ else no 'wrapper Gamescope assente non attiva il fallback'; fi
 
 normal="$tmp/normal-exit"
 mkdir -p "$normal/home" "$normal/run"
-printf 'DEFAULT_SESSION=gamescope\nNEXT_SESSION=\n' > "$normal/session.conf"
+printf 'DEFAULT_SESSION=desktop\nNEXT_SESSION=desktop\n' > "$normal/session.conf"
+write_gamescope_policy "$normal/home/session-policy"
 if PS5_SESSION_CONFIG="$normal/session.conf" PS5_SESSION_RUNTIME="$normal/run" PS5_SESSION_COMMON="$COMMON" \
    PS5_SESSION_LOG="$normal/home/session.log" PS5_FALLBACK_LOG="$normal/home/fallback.log" PS5_ALERT_FILE="$normal/home/alert.txt" \
    PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$normal/trace" HOME="$normal/home" \
-   PS5_FORCE_TTY1=1 PS5_SESSION_SKIP_DRM_WAIT=1 FAKE_GAMESCOPE_RC=0 PATH="$fakebin:$PATH" "$SUPERVISOR" >/dev/null 2>&1 && \
+   PS5_FORCE_TTY1=1 PS5_SESSION_SKIP_DRM_WAIT=1 FAKE_GAMESCOPE_RC=0 PATH="$fakebin:$PATH" "$normal/home/session-supervisor" >/dev/null 2>&1 && \
    printf 'gamescope\nplasma\n' > "$normal/expected" && cmp -s "$normal/expected" "$normal/trace" && \
    { [ ! -e "$normal/home/fallback.log" ] || ! grep -q 'Gamescope failure' "$normal/home/fallback.log"; } && \
-   grep -qx 'DEFAULT_SESSION=gamescope' "$normal/session.conf"; then
+   grep -qx 'DEFAULT_SESSION=desktop' "$normal/session.conf" && grep -qx 'NEXT_SESSION=desktop' "$normal/session.conf"; then
     ok 'uscita normale avvia KDE senza falso log di errore o cambio default'
 else no 'uscita normale Gamescope classificata male'; fi
-
-switch="$tmp/manual-switch"
-mkdir -p "$switch/home" "$switch/run" "$switch/drm/card0-HDMI-A-1"
-printf 'DEFAULT_SESSION=gamescope\nNEXT_SESSION=\n' > "$switch/session.conf"
-printf 'connected\n' > "$switch/drm/card0-HDMI-A-1/status"
-printf '1920x1080\n' > "$switch/drm/card0-HDMI-A-1/modes"
-env PS5_SESSION_CONFIG="$switch/session.conf" PS5_SESSION_RUNTIME="$switch/run" PS5_SESSION_COMMON="$COMMON" \
-  PS5_SESSION_LOG="$switch/home/session.log" PS5_FALLBACK_LOG="$switch/home/fallback.log" PS5_ALERT_FILE="$switch/home/alert.txt" \
-  PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$switch/trace" HOME="$switch/home" \
-  PS5_FORCE_TTY1=1 PS5_DRM_SYSFS_ROOT="$switch/drm" PS5_DRM_DEVICE="$tmp/card0" PS5_SESSION_DRM_POLL_INTERVAL_SEC=0.1 \
-  PS5_SESSION_DRM_STABLE_SAMPLES=1 FAKE_GAMESCOPE_WAIT=1 PATH="$fakebin:$PATH" "$SUPERVISOR" >/dev/null 2>&1 &
-supervisor_pid=$!
-for _ in $(seq 1 50); do [ -s "$switch/run/ps5-cachyos-tools/gamescope.pgid" ] && break; sleep 0.1; done
-if [ -s "$switch/run/ps5-cachyos-tools/gamescope.pgid" ] && \
-   PS5_SESSION_CONFIG="$switch/session.conf" PS5_SESSION_RUNTIME="$switch/run" PS5_SESSION_COMMON="$COMMON" PATH="$fakebin:$PATH" "$SELECT" --once desktop >/dev/null 2>&1; then
-    wait "$supervisor_pid" || true
-    if grep -qx plasma "$switch/trace" && grep -qx 'DEFAULT_SESSION=gamescope' "$switch/session.conf" && \
-       grep -qx 'NEXT_SESSION=' "$switch/session.conf" && \
-       { [ ! -e "$switch/home/fallback.log" ] || ! grep -q 'Gamescope failure' "$switch/home/fallback.log"; }; then
-        ok 'switch Gamescope verso KDE è volontario e conserva il default';
-    else no 'switch Gamescope/KDE non conserva lo stato'; fi
-else
-    kill "$supervisor_pid" 2>/dev/null || true; wait "$supervisor_pid" 2>/dev/null || true; no 'switch manuale non ha terminato Gamescope';
-fi
 
 # Exercise the mode detector and argument validation in the installed wrapper.
 wrapper_home="$tmp/wrapper-home"
@@ -278,13 +284,14 @@ else no 'wrapper Gamescope non applica override/DRM'; fi
 steam_crash="$tmp/steam-crash"
 mkdir -p "$steam_crash/home/steam/logs" "$steam_crash/run"
 printf 'DEFAULT_SESSION=gamescope\nNEXT_SESSION=\n' > "$steam_crash/session.conf"
+write_gamescope_policy "$steam_crash/home/session-policy"
 if PS5_SESSION_CONFIG="$steam_crash/session.conf" PS5_SESSION_RUNTIME="$steam_crash/run" PS5_SESSION_COMMON="$COMMON" \
    PS5_SESSION_LOG="$steam_crash/home/session.log" PS5_FALLBACK_LOG="$steam_crash/home/fallback.log" PS5_ALERT_FILE="$steam_crash/home/alert.txt" \
    PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$ROOT/modules/gamescope/files/gamescope-session-ps5" PS5_TRACE="$steam_crash/trace" HOME="$steam_crash/home" \
    PS5_FORCE_TTY1=1 PS5_SESSION_SKIP_DRM_WAIT=1 PS5_STEAM_DIR="$steam_crash/home/steam" \
    PS5_DRM_SYSFS_ROOT="$drm_root" PS5_DRM_DEVICE="$tmp/card0" PS5_STEAM_EXEC="$tmp/mockbin/steam" PS5_GAMESCOPE_EXEC="$tmp/mockbin/gamescope" \
    PS5_STEAM_ARGS="$steam_crash/steam-args" PS5_GAMESCOPE_ARGS="$steam_crash/gamescope-args" PS5_GAMESCOPE_CONFIG="$tmp/gamescope.conf" \
-   PS5_GAMESCOPE_LOG="$steam_crash/home/gamescope.log" FAKE_STEAM_CRASH_MARKER=1 PATH="$fakebin:$PATH" "$SUPERVISOR" >/dev/null 2>&1 && \
+   PS5_GAMESCOPE_LOG="$steam_crash/home/gamescope.log" FAKE_STEAM_CRASH_MARKER=1 PATH="$fakebin:$PATH" "$steam_crash/home/session-supervisor" >/dev/null 2>&1 && \
    grep -qx plasma "$steam_crash/trace" && grep -q 'exit=73' "$steam_crash/home/fallback.log" && \
    grep -qx 'DEFAULT_SESSION=gamescope' "$steam_crash/session.conf"; then
     ok 'marker di crash Steam rilevato dal wrapper provoca fallback KDE conservando il default'

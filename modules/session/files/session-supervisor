@@ -5,7 +5,7 @@ common=${PS5_SESSION_COMMON:-/usr/local/libexec/ps5-cachyos-tools/session-common
 [[ -f "$common" && ! -L "$common" ]] || { printf 'session-common.sh mancante\n' >&2; exit 1; }
 # shellcheck source=/dev/null
 source "$common"
-session_file=$PS5_SESSION_CONFIG
+policy_bin="${0%/*}/session-policy"
 drm_root=${PS5_DRM_SYSFS_ROOT:-/sys/class/drm}
 drm_device=${PS5_DRM_DEVICE:-/dev/dri/card0}
 timeout=${PS5_SESSION_DRM_READY_TIMEOUT_SEC:-30}
@@ -21,15 +21,26 @@ valid_uint() { [[ $1 =~ ^[0-9]{1,4}$ ]]; }
 valid_uint "$timeout" && (( timeout >= 1 && timeout <= 600 )) || timeout=30
 valid_uint "$stable_needed" && (( stable_needed >= 1 && stable_needed <= 10 )) || stable_needed=3
 [[ $poll =~ ^[0-9]+([.][0-9]{1,2})?$ ]] || poll=1
-if [[ ${1:-} == --check-config ]]; then ps5_session_read_config "$session_file"; exit $?; fi
-
-if ! ps5_session_read_config "$session_file"; then
-    ps5_session_log error 'configurazione assente o invalida; uso KDE come default'
-    PS5_SESSION_DEFAULT=desktop PS5_SESSION_NEXT=''
+if [[ ${1:-} == --check-config ]]; then
+    [[ -x $policy_bin ]] || exit 1
+    requested=$("$policy_bin") || exit 1
+    [[ $requested == desktop || $requested == gamescope ]]
+    exit $?
 fi
-requested=${PS5_SESSION_NEXT:-$PS5_SESSION_DEFAULT}
-if [[ -n $PS5_SESSION_NEXT ]]; then
-    ps5_session_write_config "$PS5_SESSION_DEFAULT" '' || ps5_session_log warn 'impossibile consumare l override one-shot'
+
+# Boot selection comes only from this repository-owned policy. Legacy session.conf
+# and steamos-session-select are deliberately not consulted here.
+if [[ ! -x $policy_bin ]]; then
+    ps5_session_log error "policy sessione assente: $policy_bin; uso KDE come default"
+    requested=desktop
+else
+    requested=$("$policy_bin" 2>/dev/null) || requested=''
+    if [[ $requested != desktop && $requested != gamescope ]]; then
+        ps5_session_log error 'policy sessione invalida; uso KDE come default'
+        requested=desktop
+    else
+        ps5_session_log info "policy repository seleziona $requested"
+    fi
 fi
 export LIBSEAT_BACKEND=logind
 
@@ -64,7 +75,6 @@ wait_for_drm() {
     ps5_session_log info "attesa DRM: device=$drm_device timeout=${timeout}s samples=$stable_needed"
     while :; do
         if system_stopping; then return 2; fi
-        if ps5_session_read_config "$session_file" && [[ $PS5_SESSION_NEXT == desktop ]]; then return 3; fi
         fingerprint=$(drm_fingerprint 2>/dev/null || true)
         if [[ -n $fingerprint ]]; then
             if [[ $fingerprint == "$previous" ]]; then stable=$((stable + 1)); else previous=$fingerprint; stable=1; fi
@@ -139,7 +149,6 @@ wait_rc=$?
 case $wait_rc in
     0) ;;
     2) ps5_session_log info 'spegnimento durante attesa DRM'; exit 0;;
-    3) ps5_session_log info 'switch manuale a KDE durante attesa DRM'; ps5_session_write_config "$PS5_SESSION_DEFAULT" ''; prepare_kde; exit $?;;
     *) fallback_to_kde "DRM non pronto entro ${timeout}s" 1; exit $?;;
 esac
 [[ -x $gamescope_bin ]] || { fallback_to_kde "wrapper assente: $gamescope_bin" 1; exit $?; }
@@ -157,10 +166,7 @@ wait "$gamescope_pid"
 gamescope_rc=$?
 rm -f -- "$pgid_file"
 if system_stopping; then ps5_session_log info 'shutdown dopo Gamescope; non avvio KDE'; exit 0; fi
-if ps5_session_read_config "$session_file" && [[ $PS5_SESSION_NEXT == desktop ]]; then
-    ps5_session_write_config "$PS5_SESSION_DEFAULT" '' || true
-    fallback_to_kde 'switch manuale a KDE' 0
-elif [[ $gamescope_rc -eq 0 ]]; then
+if [[ $gamescope_rc -eq 0 ]]; then
     fallback_to_kde 'uscita normale da Gamescope' 0
 else
     fallback_to_kde "Gamescope exit=$gamescope_rc" 1

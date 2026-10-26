@@ -1,47 +1,33 @@
 # Modulo `session`
 
-Il modulo Session è l'unico orchestratore dell'avvio grafico automatico su TTY1. KDE e Gamescope restano responsabili dei rispettivi ambienti. Session dipende da entrambi nel manifest, ma l'installazione selettiva di KDE o Gamescope non attiva l'autologin grafico.
+Il modulo Session è l'unico orchestratore dell'avvio grafico automatico su TTY1. KDE e Gamescope restano responsabili dei rispettivi ambienti; Session dipende da entrambi, ma installare KDE o Gamescope da soli non attiva l'autologin grafico.
 
-## Preferenza e comandi
+## Policy esclusiva di avvio
 
-Il file unico `/home/steam/.config/ps5-cachyos-tools/session.conf` contiene `DEFAULT_SESSION` e `NEXT_SESSION`. Alla prima installazione la sessione predefinita è KDE (`desktop`). Il file è preservato da reinstallazione e rimozione normale, così una preferenza esplicita dell'utente resta valida.
+La scelta automatica al boot è definita esclusivamente dal file versionato `modules/session/files/session-policy`, installato come `/usr/local/libexec/ps5-cachyos-tools/session-policy`. La versione del repository seleziona `desktop` (KDE). Per passare a Gamescope, modificare l'output della policy in `gamescope` nel branch e reinstallare/aggiornare il modulo Session. Il supervisore accetta solo `desktop` o `gamescope`; se la policy manca o restituisce un valore invalido, registra l'errore e avvia KDE.
 
-Su un'installazione esistente che ha ancora Gamescope come preferenza, seleziona KDE una volta con `steamos-session-select --default desktop`; l'aggiornamento del modulo non sovrascrive la configurazione persistente.
+`DEFAULT_SESSION`, `NEXT_SESSION`, `~/.config/ps5-next-session` e ogni valore scritto da precedenti versioni di `steamos-session-select` sono legacy: non vengono consultati per decidere il boot. Il file `session.conf` può restare sul sistema per compatibilità con installazioni precedenti, ma non ha autorità sulla sessione automatica.
 
-```bash
-# Cambio permanente e transizione alla sessione richiesta
-steamos-session-select gamescope
-steamos-session-select desktop
-
-# Cambia solo la prossima sessione; poi torna al default persistente
-steamos-session-select --once desktop
-steamos-session-select --once gamescope
-
-# Alias esplicito del cambio permanente
-steamos-session-select --default desktop
-```
-
-Sono mantenuti gli alias legacy `plasma` e `gamescope-wayland`. Senza argomenti il comando continua a selezionare `desktop`. Le richieste sono scritte atomicamente; input non riconosciuti vengono rifiutati. KDE→Gamescope termina l'attuale sessione Plasma e si affida al normale login automatico TTY1 della distribuzione; Gamescope→KDE termina il compositor e il supervisore avvia Plasma nello stesso ciclo, senza reboot.
+Il comando installato `steamos-session-select` è mantenuto solo come avviso compatibile: non modifica configurazioni, non termina sessioni e non può sostituire la policy. Le opzioni `--default`, `--once`, `desktop` e `gamescope` non cambiano la sessione corrente né il boot successivo. Ogni cambio della sessione automatica deve passare dalla policy versionata e dalla distribuzione del modulo aggiornato.
 
 ## Avvio e fallback
 
-`/etc/profile.d/ps5-tty-session.sh` limita l'avvio automatico a una shell login su `/dev/tty1`. Il supervisore consuma l'override one-shot; con KDE selezionato avvia Plasma direttamente. Se Gamescope è selezionato, attende `/dev/dri/card0` e un connettore collegato con modalità stabile, poi avvia `gamescope-session-ps5`. Timeout predefinito DRM: 30 s; intervallo: 1 s; campioni stabili: 3. I parametri sono configurabili tramite `PS5_SESSION_DRM_READY_TIMEOUT_SEC` (1–600), `PS5_SESSION_DRM_POLL_INTERVAL_SEC` e `PS5_SESSION_DRM_STABLE_SAMPLES`.
+`/etc/profile.d/ps5-tty-session.sh` limita l'avvio automatico a una shell login su `/dev/tty1`; questa invoca il supervisore, che legge la sola policy repository. Per KDE avvia Plasma direttamente. Per Gamescope attende `/dev/dri/card0` e un connettore collegato con modalità stabile, poi avvia `gamescope-session-ps5`. Timeout DRM predefinito: 30 s; intervallo: 1 s; campioni stabili: 3. Sono configurabili `PS5_SESSION_DRM_READY_TIMEOUT_SEC` (1–600), `PS5_SESSION_DRM_POLL_INTERVAL_SEC` e `PS5_SESSION_DRM_STABLE_SAMPLES`.
 
-Se l'utente sceglie Gamescope come preferenza, timeout DRM, device assente, wrapper assente, exit non zero di Gamescope/Steam o crash Steam riconoscibile avviano KDE, scrivono `~/.gamescope-session.log` e `~/.gamescope-fallback.log` e creano un avviso desktop. La pulizia termina il process group Gamescope prima di lanciare Plasma. Il fallback non modifica la preferenza persistente; al successivo avvio viene ritentata la preferenza scelta. In ogni caso l'utente può selezionare KDE con `steamos-session-select desktop` o Gamescope con `steamos-session-select gamescope`.
+Se la policy seleziona Gamescope, timeout DRM, device assente, wrapper assente, exit non zero di Gamescope/Steam o crash Steam riconoscibile avviano KDE, scrivono `~/.gamescope-session.log` e `~/.gamescope-fallback.log` e creano un avviso desktop. Il fallback non cambia la policy; al boot seguente viene quindi ritentata la scelta versionata. La pulizia termina il process group Gamescope prima di lanciare Plasma.
 
-Una terminazione volontaria/normalmente riuscita (exit 0), lo switch esplicito a KDE e lo shutdown non sono registrati come errori. All'uscita normale il supervisore apre KDE senza modificare il default. Non c'è un ciclo interno di reboot o retry Gamescope. Se KDE non è disponibile, il processo termina lasciando il login testuale TTY1 accessibile.
+Una terminazione normale di Gamescope (exit 0) avvia KDE senza segnalarla come errore. Lo shutdown non avvia una seconda sessione. Se KDE non è disponibile, il processo termina lasciando accessibile il login testuale TTY1.
 
-Un errore visivo come colori separati o un handshake HDMI che appare con output software apparentemente pronto non è rilevabile in modo affidabile via shell: richiede diagnosi sul display/PS5 e resta fuori dal trigger automatico.
+Un errore visivo come colori separati o un handshake HDMI apparentemente pronto non è rilevabile in modo affidabile via shell: richiede diagnosi su display/PS5.
 
 ## Lifecycle e verifica
 
-Il modulo installa il profilo login, il selettore e il supervisore tramite hook del framework. Il boot hook normale valida gli artefatti; non avvia un secondo manager grafico systemd e non sostituisce l'autologin TTY1 della distro. La configurazione sessione viene mantenuta da `remove` e cancellata solo con `--purge-config`.
+Il modulo installa il profilo login, il supervisore, la policy e lo stub informativo del selettore. Il boot hook valida gli artefatti; non introduce un secondo manager grafico systemd. La vecchia configurazione viene mantenuta da reinstallazione e rimozione normale; la rimozione con `--purge-config` può eliminarla.
 
 ```bash
-cat /home/steam/.config/ps5-cachyos-tools/session.conf
+cat /usr/local/libexec/ps5-cachyos-tools/session-policy
 tail -n 100 /home/steam/.gamescope-session.log
 tail -n 100 /home/steam/.gamescope-fallback.log
-steamos-session-select --once desktop
 ```
 
-I test simulati verificano selezione, persistenza, timeout, avvio nominale, fallback e switch tramite config. Avvio reale Plasma/Gamescope, acquisizione DRM, segnale HDMI e affidabilità su reboot devono essere provati su PS5; non sono deducibili dai test mock.
+I test mock verificano che `DEFAULT_SESSION` e `NEXT_SESSION` non prevalgano sulla policy e coprono avvio, timeout e fallback. La conferma di Plasma/Gamescope, DRM, HDMI e comportamento al reboot richiede una prova sul sistema PS5; i test mock non dimostrano il boot hardware.

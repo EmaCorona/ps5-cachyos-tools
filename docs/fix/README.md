@@ -1,5 +1,7 @@
 # Registro fix
 
+- 2026-10-26 — [`session-policy-authority`](fix-session-policy-authority.md): selezione boot esclusivamente dalla policy versionata, indipendente dalle preferenze persistenti e dal selettore legacy.
+
 - 2026-10-26 — [`d097e93`](fix-d097e9363852-framework-fan-remove.md): rimozione live del modulo fan coordinata con la disabilitazione systemd del framework.
 
 - 2026-10-26 — [`082e173`](fix-082e173-live-ps5-e2e.md): recupero del target PS5 fuori curva e readiness corretto per nuove installazioni live.
