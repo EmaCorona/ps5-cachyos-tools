@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -u
+mode=${1:---check}
+if [[ $mode != --check && $mode != --apply ]]; then printf 'Uso: ps5-drm-setup [--check|--apply]\n' >&2; exit 2; fi
+command -v proptest >/dev/null 2>&1 || { printf 'proptest non installato; nessuna modifica DRM eseguita.\n' >&2; exit 0; }
+output=$(proptest 2>/dev/null) || { printf 'Impossibile leggere le proprietà DRM; nessuna modifica eseguita.\n' >&2; exit 0; }
+connector_id='' connector_name=''
+connector_re='^Connector[[:space:]]+([0-9]+)[[:space:]]+\(([^)]+)\)'
+while IFS= read -r line; do
+    if [[ $line =~ $connector_re ]]; then
+        connector_id=${BASH_REMATCH[1]}; connector_name=${BASH_REMATCH[2]}; continue
+    fi
+    [[ $connector_name == DP-* || $connector_name == HDMI-* ]] || continue
+    if [[ $line =~ ^[[:space:]]+([0-9]+)[[:space:]]+max[[:space:]]+bpc: ]]; then
+        prop_id=${BASH_REMATCH[1]}
+        if [[ $mode == --apply ]]; then proptest "$connector_id" connector "$prop_id" 8 >/dev/null 2>&1 || true; else printf '%s: max bpc=8 disponibile (proprietà %s)\n' "$connector_name" "$prop_id"; fi
+    elif [[ $line =~ ^[[:space:]]+([0-9]+)[[:space:]]+Colorspace: ]]; then
+        prop_id=${BASH_REMATCH[1]}
+        if [[ $mode == --apply ]]; then proptest "$connector_id" connector "$prop_id" 0 >/dev/null 2>&1 || true; else printf '%s: colorspace Default disponibile (proprietà %s)\n' "$connector_name" "$prop_id"; fi
+    fi
+done <<< "$output"
+[[ $mode != --check ]] || printf 'Modalità --check: nessuna proprietà modificata. Usare --apply solo dopo aver verificato l output.\n'

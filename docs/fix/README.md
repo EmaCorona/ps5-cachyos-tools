@@ -1,5 +1,9 @@
 # Registro fix
 
+- 2026-10-26 — [`08f967d83253`](fix-08f967d83253-session-live-switch.md): ripristinato il cambio live KDE↔Gamescope senza modificare la policy di boot.
+
+- 2026-10-26 — [`66f508025ad4`](fix-66f508025ad4-session-policy-authority.md): selezione boot esclusivamente dalla policy versionata, indipendente dalle preferenze persistenti e dal selettore legacy.
+
 - 2026-10-26 — [`d097e93`](fix-d097e9363852-framework-fan-remove.md): rimozione live del modulo fan coordinata con la disabilitazione systemd del framework.
 
 - 2026-10-26 — [`082e173`](fix-082e173-live-ps5-e2e.md): recupero del target PS5 fuori curva e readiness corretto per nuove installazioni live.

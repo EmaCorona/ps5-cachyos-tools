@@ -14,13 +14,14 @@
 
 Modular post-installation, maintenance, and diagnostics framework for **PS5 Linux**, with a focus on CachyOS-based distributions. The framework discovers modules through their manifests and manages installation, checks, status, reapplication, and removal without requiring changes to the core when a module is added.
 
-The `feature/vram-management` branch includes three independent modules:
+The project includes independent modules for system management, graphics sessions, and loader memory configuration:
 
 - **`fan`** — PS5 thermal controller with 15 temperature zones and `low`, `balanced`, and `high` profiles. It runs as a systemd service and reports readiness and degraded states.
-- **`boot-cleanup`** — conservative early-boot task that only removes verified stale Steam artifacts from an explicit allowlist. It does not terminate processes or perform general system cleanup.
+- **`boot-cleanup`** — conservative early-boot task that only removes verified stale Steam artifacts from an explicit allowlist. A separate manual helper normalizes `/tmp/dumps` permissions without deleting its contents.
+- **`kde`, `gamescope`, and `session`** — prepare KDE and Gamescope and let the repository select the default session at TTY1, switch between KDE and Gamescope, and fall back to KDE if Gamescope fails.
 - **`vram`** — writes the selected allocation to `vram.txt` on the loader's FAT32 partition. Its first-install default is **4 GiB**; the value can be selected during installation.
 
-The project operates on an **existing Linux installation**. It does not install CachyOS, partition or format disks, prepare an exploit or bootloader, or include the network, Bluetooth, display, Gamescope, KDE, and M.2 migration patches from the related [PS5 CachyOS Patch](https://github.com/EmaCorona/ps5-cachy-os-patch) repository. Hardware compatibility depends on the PS5 Linux kernel, drivers, firmware, and exposed device interfaces. Automated tests are hardware-free and do not replace tests on the console.
+The project operates on an **existing Linux installation**. It does not install CachyOS, partition or format disks, prepare an exploit or bootloader, or include the network, Bluetooth, display, and M.2 migration patches from the related [PS5 CachyOS Patch](https://github.com/EmaCorona/ps5-cachy-os-patch) repository. Hardware compatibility depends on the PS5 Linux kernel, drivers, firmware, and exposed device interfaces. Automated tests are hardware-free and do not replace tests on the console.
 
 See the [architecture guide](docs/architecture.md), [module API](docs/module-api.md), and [module documentation index](docs/modules/README.md) for implementation details.
 
@@ -31,7 +32,7 @@ See the [architecture guide](docs/architecture.md), [module API](docs/module-api
 Mount the existing Linux root filesystem and the loader's FAT32 partition before running the installer. In this example, `/mnt/ps5-root` and `/mnt/ps5-boot` must be actual mountpoints.
 
 ```bash
-git clone --branch feature/vram-management --single-branch https://github.com/EmaCorona/ps5-cachyos-tools.git
+git clone --branch develop --single-branch https://github.com/EmaCorona/ps5-cachyos-tools.git
 cd ps5-cachyos-tools
 
 findmnt /mnt/ps5-root
@@ -42,14 +43,14 @@ sudo ./bin/ps5-cachyos-tools install --root /mnt/ps5-root --boot /mnt/ps5-boot -
 sudo ./bin/ps5-cachyos-tools install --root /mnt/ps5-root --boot /mnt/ps5-boot
 ```
 
-Without `--module`, the installer selects all modules available in the checkout. The dry run validates the target and displays the plan without applying modules. Offline installation copies files and prepares systemd enablement links in the target; it does not run systemd or execute boot tasks on the host. The `fan` service and boot tasks run when the target system starts.
+Without `--module`, the installer selects all modules available in the checkout. The dry run validates the target and displays the plan without applying modules. Offline installation copies files and prepares systemd enablement links in the target; it does not run systemd or execute boot tasks on the host. The `fan` service and boot tasks run when the target system starts. The graphics session modules apply their configuration at normal boot; the session supervisor selects KDE by default and supports switching to Gamescope.
 
 ### Install directly on a running PS5 Linux system (live)
 
 The `--live` option targets the currently running root filesystem. Set `--boot` to the mounted FAT32 loader partition; `/boot/efi` is only an example and can differ by installation.
 
 ```bash
-git clone --branch feature/vram-management --single-branch https://github.com/EmaCorona/ps5-cachyos-tools.git
+git clone --branch develop --single-branch https://github.com/EmaCorona/ps5-cachyos-tools.git
 cd ps5-cachyos-tools
 
 findmnt /boot/efi
@@ -57,7 +58,7 @@ sudo ./bin/ps5-cachyos-tools install --live --boot /boot/efi --dry-run
 sudo ./bin/ps5-cachyos-tools install --live --boot /boot/efi
 ```
 
-The live installer requires administrative privileges and PS5 platform detection. It enables and starts the fan service after successful installation. `boot-cleanup` runs through `ps5-tools-early.service` at a subsequent boot, or can be invoked with `reapply`. The VRAM module writes the selected byte count in hexadecimal to `vram.txt`; its initial default is 4 GiB. The loader reads that file during a later Linux boot.
+The live installer requires administrative privileges and PS5 platform detection. It enables and starts the fan service after successful installation. `boot-cleanup` runs through `ps5-tools-early.service` at a subsequent boot, or can be invoked with `reapply`. KDE, Gamescope, and session tasks validate their artifacts at normal boot; TTY1 starts KDE by default, and the session controller supports switching back to Gamescope. The VRAM module writes the selected byte count in hexadecimal to `vram.txt`; its initial default is 4 GiB. The loader reads that file during a later Linux boot.
 
 ### Install selected modules or set VRAM explicitly
 
@@ -106,7 +107,7 @@ sudo journalctl -u ps5-tools-early.service -b --no-pager
 │   ├── module-api.md
 │   ├── e2e/
 │   ├── fix/
-│   └── modules/                # fan, boot-cleanup, and vram guides
+│   └── modules/                # fan, boot-cleanup, KDE, Gamescope, session, and VRAM guides
 ├── lib/
 │   ├── core/                   # Discovery, target checks, transactions, state, systemd
 │   └── modules/                # Framework adapters for modules
@@ -114,12 +115,15 @@ sudo journalctl -u ps5-tools-early.service -b --no-pager
 │   ├── _template/              # Example manifest and hook
 │   ├── boot-cleanup/           # Conservative early-boot cleanup task
 │   ├── fan/                    # Fan service installation and runtime hooks
+│   ├── gamescope/              # Gamescope DRM session and diagnostics
+│   ├── kde/                    # KDE Wayland/DRM integration
+│   ├── session/                # TTY1 session selection and switching
 │   └── vram/                   # Loader VRAM configuration task
 ├── systemd/                    # Boot runners and fan service
 └── tests/                      # Hardware-free automated test suites
 ```
 
-Each module is discovered from `modules/<id>/module.conf` and supplies its own lifecycle hooks. Modules currently have no dependencies on one another. `fan` is a persistent service; `boot-cleanup` and `vram` are tasks dispatched by the framework at their declared boot phase. See the [module API](docs/module-api.md) before adding a module.
+Each module is discovered from `modules/<id>/module.conf` and supplies its own lifecycle hooks. `session` automatically selects the `kde` and `gamescope` dependencies; the other modules remain independently selectable. `fan` is a persistent service; `boot-cleanup`, graphics setup, and `vram` are tasks dispatched by the framework at their declared boot phase. The session module installs the TTY1 supervisor that selects KDE by default and supports switching between KDE and Gamescope. See the [module API](docs/module-api.md) before adding a module.
 
 ## 👥 Contributors
 

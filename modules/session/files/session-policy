@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Repository-owned boot policy. Change this value to `gamescope` to boot SteamOS UI.
+printf '%s\n' 'desktop'

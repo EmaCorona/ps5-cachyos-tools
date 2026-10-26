@@ -85,6 +85,10 @@ Una fix è documentata soltanto quando la scheda in `docs/fix/` e la voce in `do
 
 Questo repository non contiene la pipeline di patching host né moduli di cleanup del progetto originale. Gli errori del controller ventole devono essere gestiti dai propri artefatti: lock in `/run/ps5-fan`, stato runtime atomico, stato `DEGRADED`, disinstallazione dei soli file di proprietà e test deterministici. Non creare o importare componenti di boot cleanup estranei al controller.
 
+## Regola per il recovery manuale Steam in `boot-cleanup`
+
+Il recovery della cartella dump Steam deve restare un helper on-demand del modulo `boot-cleanup`, distinto dall'hook `early/always`. Non eseguirlo automaticamente dal boot hook. Prima di modificare `/tmp/dumps`, verificare in modo mirato che `steam` e `steamwebhelper` non siano attivi; se il controllo manca o restituisce un errore, interrompersi senza modifiche. Operare solo con l'UID dell'utente `steam`; intervenire solo sulla directory regolare `/tmp/dumps` posseduta da tale UID, normalizzando i permessi a `700` solo quando non sono già `700` o `1700`. È consentito creare la directory se manca; non cancellare, svuotare o sostituire una directory esistente, né rimuovere dump, log o marker `.crash`. Il marker `.crash` da solo non dimostra che la pulizia sia necessaria. Aggiornare insieme helper, test e `docs/modules/boot-cleanup.md` quando si cambia questa regola.
+
 ## Come estendere questo file
 
 Per aggiungere nuove regole in futuro:

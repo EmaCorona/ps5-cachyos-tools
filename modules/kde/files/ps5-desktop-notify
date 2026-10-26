@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -u
+alert=${PS5_ALERT_FILE:-${XDG_CONFIG_HOME:-${HOME:-/home/steam}/.config}/ps5-cachyos-tools/alert.txt}
+[[ -f "$alert" && ! -L "$alert" ]] || exit 0
+message=$(cat -- "$alert" 2>/dev/null || true)
+[[ -n "$message" ]] || { rm -f -- "$alert"; exit 0; }
+if command -v kdialog >/dev/null 2>&1; then
+    kdialog --title 'PS5 CachyOS' --msgbox "$message" >/dev/null 2>&1 || true
+elif command -v notify-send >/dev/null 2>&1; then
+    notify-send -u critical -t 15000 'PS5 CachyOS' "$message" >/dev/null 2>&1 || true
+fi
+rm -f -- "$alert"
