@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 PS5_SESSION_CONFIG=${PS5_SESSION_CONFIG:-${XDG_CONFIG_HOME:-${HOME:-/home/steam}/.config}/ps5-cachyos-tools/session.conf}
 PS5_SESSION_RUNTIME=${PS5_SESSION_RUNTIME:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}}
-PS5_SESSION_DEFAULT=gamescope
+PS5_SESSION_DEFAULT=desktop
 PS5_SESSION_NEXT=''
 
 ps5_session_read_config() {
     local file=${1:-$PS5_SESSION_CONFIG} line key value
-    PS5_SESSION_DEFAULT=gamescope PS5_SESSION_NEXT=''
+    PS5_SESSION_DEFAULT=desktop PS5_SESSION_NEXT=''
     [[ -f "$file" && ! -L "$file" ]] || return 1
     declare -A seen=()
     while IFS= read -r line || [[ -n "$line" ]]; do

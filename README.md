@@ -64,7 +64,7 @@ Senza `--module` vengono installati **tutti i moduli disponibili**, mentre `--li
 | :--- | :--- | :--- |
 | **`fan`** | Immediata | `ps5-fan-daemon.service` viene abilitato e avviato subito nella normale installazione live, se i controlli riescono. Continuerà a funzionare tramite systemd. |
 | **`boot-cleanup`** | Immediata | L'hook di pulizia **non viene eseguito dall'installazione**: parte normalmente al boot successivo tramite `ps5-tools-early.service`, oppure manualmente con `reapply`. |
-| **`kde`, `gamescope`, `session`** | Immediata | I task verificano gli artefatti al boot normale; il login TTY1 seleziona Gamescope come default e usa KDE come fallback. |
+| **`kde`, `gamescope`, `session`** | Immediata | I task verificano gli artefatti al boot normale; il login TTY1 avvia KDE per default. Gamescope resta selezionabile e KDE è anche il fallback in caso di errore Gamescope. |
 
 **Verifica immediata:**
 

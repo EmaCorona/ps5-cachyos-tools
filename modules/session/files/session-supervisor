@@ -24,8 +24,8 @@ valid_uint "$stable_needed" && (( stable_needed >= 1 && stable_needed <= 10 )) |
 if [[ ${1:-} == --check-config ]]; then ps5_session_read_config "$session_file"; exit $?; fi
 
 if ! ps5_session_read_config "$session_file"; then
-    ps5_session_log error 'configurazione assente o invalida; uso il default sicuro Gamescope'
-    PS5_SESSION_DEFAULT=gamescope PS5_SESSION_NEXT=''
+    ps5_session_log error 'configurazione assente o invalida; uso KDE come default'
+    PS5_SESSION_DEFAULT=desktop PS5_SESSION_NEXT=''
 fi
 requested=${PS5_SESSION_NEXT:-$PS5_SESSION_DEFAULT}
 if [[ -n $PS5_SESSION_NEXT ]]; then

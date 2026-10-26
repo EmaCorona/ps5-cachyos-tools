@@ -4,7 +4,9 @@ Il modulo Session è l'unico orchestratore dell'avvio grafico automatico su TTY1
 
 ## Preferenza e comandi
 
-Il file unico `/home/steam/.config/ps5-cachyos-tools/session.conf` contiene `DEFAULT_SESSION` e `NEXT_SESSION`. Alla prima installazione la sessione predefinita è Gamescope. Il file è preservato da reinstallazione e rimozione normale.
+Il file unico `/home/steam/.config/ps5-cachyos-tools/session.conf` contiene `DEFAULT_SESSION` e `NEXT_SESSION`. Alla prima installazione la sessione predefinita è KDE (`desktop`). Il file è preservato da reinstallazione e rimozione normale, così una preferenza esplicita dell'utente resta valida.
+
+Su un'installazione esistente che ha ancora Gamescope come preferenza, seleziona KDE una volta con `steamos-session-select --default desktop`; l'aggiornamento del modulo non sovrascrive la configurazione persistente.
 
 ```bash
 # Cambio permanente e transizione alla sessione richiesta
@@ -23,9 +25,9 @@ Sono mantenuti gli alias legacy `plasma` e `gamescope-wayland`. Senza argomenti 
 
 ## Avvio e fallback
 
-`/etc/profile.d/ps5-tty-session.sh` limita l'avvio automatico a una shell login su `/dev/tty1`. Il supervisore consuma l'override one-shot, attende `/dev/dri/card0` e un connettore collegato con modalità stabile, poi avvia `gamescope-session-ps5`. Timeout predefinito DRM: 30 s; intervallo: 1 s; campioni stabili: 3. I parametri sono configurabili tramite `PS5_SESSION_DRM_READY_TIMEOUT_SEC` (1–600), `PS5_SESSION_DRM_POLL_INTERVAL_SEC` e `PS5_SESSION_DRM_STABLE_SAMPLES`.
+`/etc/profile.d/ps5-tty-session.sh` limita l'avvio automatico a una shell login su `/dev/tty1`. Il supervisore consuma l'override one-shot; con KDE selezionato avvia Plasma direttamente. Se Gamescope è selezionato, attende `/dev/dri/card0` e un connettore collegato con modalità stabile, poi avvia `gamescope-session-ps5`. Timeout predefinito DRM: 30 s; intervallo: 1 s; campioni stabili: 3. I parametri sono configurabili tramite `PS5_SESSION_DRM_READY_TIMEOUT_SEC` (1–600), `PS5_SESSION_DRM_POLL_INTERVAL_SEC` e `PS5_SESSION_DRM_STABLE_SAMPLES`.
 
-Timeout o device DRM assente, wrapper assente, exit non zero di Gamescope/Steam o crash Steam riconoscibile avviano KDE, scrivono `~/.gamescope-session.log` e `~/.gamescope-fallback.log` e creano un avviso desktop. La pulizia termina il process group Gamescope prima di lanciare Plasma. La preferenza persistente non viene cambiata dal fallback; dopo un errore il successivo avvio ritenta quindi la preferenza Gamescope e l'utente può cambiarla con `steamos-session-select desktop`.
+Se l'utente sceglie Gamescope come preferenza, timeout DRM, device assente, wrapper assente, exit non zero di Gamescope/Steam o crash Steam riconoscibile avviano KDE, scrivono `~/.gamescope-session.log` e `~/.gamescope-fallback.log` e creano un avviso desktop. La pulizia termina il process group Gamescope prima di lanciare Plasma. Il fallback non modifica la preferenza persistente; al successivo avvio viene ritentata la preferenza scelta. In ogni caso l'utente può selezionare KDE con `steamos-session-select desktop` o Gamescope con `steamos-session-select gamescope`.
 
 Una terminazione volontaria/normalmente riuscita (exit 0), lo switch esplicito a KDE e lo shutdown non sono registrati come errori. All'uscita normale il supervisore apre KDE senza modificare il default. Non c'è un ciclo interno di reboot o retry Gamescope. Se KDE non è disponibile, il processo termina lasciando il login testuale TTY1 accessibile.
 

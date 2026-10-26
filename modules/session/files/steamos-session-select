@@ -21,8 +21,8 @@ case "$target" in gamescope|gamescope-wayland) target=gamescope;; desktop|plasma
 if ps5_session_read_config; then
     old_default=$PS5_SESSION_DEFAULT old_next=$PS5_SESSION_NEXT
 else
-    old_default=gamescope old_next=''
-    ps5_session_log warn 'configurazione sessione invalida o assente; uso Gamescope come default'
+    old_default=desktop old_next=''
+    ps5_session_log warn 'configurazione sessione invalida o assente; uso KDE come default'
 fi
 if [[ $scope == once ]]; then
     new_default=$old_default

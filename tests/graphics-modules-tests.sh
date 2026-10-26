@@ -27,10 +27,10 @@ printf 'old profile\n' > "$root/etc/profile.d/ps5-tty-session.sh"
 printf 'old selector\n' > "$root/usr/bin/steamos-session-select"
 printf '[preferred]\ndefault=kde\n' > "$root/usr/share/xdg-desktop-portal/gamescope-portals.conf"
 if "$CLI" install --root "$root" --module session > "$tmp/install.log" 2>&1; then ok 'installazione Session seleziona KDE e Gamescope come dipendenze'; else cat "$tmp/install.log" >&2; no 'installazione grafica selettiva'; fi
-if grep -qx 'gamescope' <(sed -n 's/^DEFAULT_SESSION=//p' "$root/home/steam/.config/ps5-cachyos-tools/session.conf") && \
+if grep -qx 'desktop' <(sed -n 's/^DEFAULT_SESSION=//p' "$root/home/steam/.config/ps5-cachyos-tools/session.conf") && \
    [ ! -e "$root/usr/lib/ps5-cachyos-tools/modules/fan/module.conf" ] && [ ! -e "$root/usr/lib/ps5-cachyos-tools/modules/boot-cleanup/module.conf" ]; then
-    ok 'prima installazione imposta Gamescope e non tocca gli altri moduli'
-else no 'default Gamescope o isolamento moduli errato'; fi
+    ok 'prima installazione imposta KDE e non tocca gli altri moduli'
+else no 'default KDE o isolamento moduli errato'; fi
 if "$CLI" check --root "$root" > "$tmp/check.log" 2>&1; then ok 'check di KDE, Gamescope e Session'; else cat "$tmp/check.log" >&2; no 'check moduli grafici'; fi
 if grep -q 'steam' "$root/etc/group" && ! grep -q ',steam,steam' "$root/etc/group"; then ok 'gruppi grafici aggiunti senza duplicati'; else no 'gruppi grafici duplicati o assenti'; fi
 if [ -x "$root/usr/local/libexec/ps5-cachyos-tools/gamescope-session" ] && \
@@ -63,7 +63,7 @@ if "$CLI" remove kde --root "$root" > "$tmp/remove-kde.log" 2>&1 && \
     ok 'rimozione KDE toglie solo i gruppi aggiunti e preserva membership originale'
 else cat "$tmp/remove-kde.log" >&2; no 'rimozione gruppi KDE errata'; fi
 
-# A clean installation defaults to Gamescope; a recognized legacy choice is migrated.
+# A clean installation defaults to KDE; a recognized legacy preference is preserved.
 legacy_root="$tmp/legacy-root"
 fixture "$legacy_root"
 printf 'desktop\n' > "$legacy_root/home/steam/.config/ps5-next-session"
@@ -71,6 +71,14 @@ if "$CLI" install --root "$legacy_root" --module session >/dev/null 2>&1 && \
    grep -qx 'DEFAULT_SESSION=desktop' "$legacy_root/home/steam/.config/ps5-cachyos-tools/session.conf"; then
     ok 'migrazione conserva la preferenza selezionata dal modulo legacy'
 else no 'preferenza legacy non migrata'; fi
+
+legacy_gamescope_root="$tmp/legacy-gamescope-root"
+fixture "$legacy_gamescope_root"
+printf 'gamescope\n' > "$legacy_gamescope_root/home/steam/.config/ps5-next-session"
+if "$CLI" install --root "$legacy_gamescope_root" --module session >/dev/null 2>&1 && \
+   grep -qx 'DEFAULT_SESSION=gamescope' "$legacy_gamescope_root/home/steam/.config/ps5-cachyos-tools/session.conf"; then
+    ok 'migrazione conserva una preferenza Gamescope legacy esplicita'
+else no 'preferenza Gamescope legacy non preservata'; fi
 
 # Selector keeps persistent and one-shot preferences separate and rejects invalid input.
 fakebin="$tmp/fakebin"
@@ -93,6 +101,11 @@ session_config="$tmp/selector/session.conf"
 session_runtime="$tmp/selector/run"
 mkdir -p "${session_config%/*}"
 printf 'DEFAULT_SESSION=gamescope\nNEXT_SESSION=\n' > "$session_config"
+missing_selector_config="$tmp/selector/missing-session.conf"
+if PS5_SESSION_CONFIG="$missing_selector_config" PS5_SESSION_RUNTIME="$session_runtime" PS5_SESSION_COMMON="$COMMON" PATH="$fakebin:$PATH" "$SELECT" --once gamescope >/dev/null 2>&1 && \
+   grep -qx 'DEFAULT_SESSION=desktop' "$missing_selector_config" && grep -qx 'NEXT_SESSION=gamescope' "$missing_selector_config"; then
+    ok 'selettore usa KDE come default quando la configurazione manca'
+else no 'selettore non usa KDE come default con configurazione assente'; fi
 if PS5_SESSION_CONFIG="$session_config" PS5_SESSION_RUNTIME="$session_runtime" PS5_SESSION_COMMON="$COMMON" PATH="$fakebin:$PATH" "$SELECT" --once desktop >/dev/null 2>&1 && \
    grep -qx 'DEFAULT_SESSION=gamescope' "$session_config" && grep -qx 'NEXT_SESSION=desktop' "$session_config"; then
     ok 'switch one-shot non modifica il default persistente'
@@ -139,11 +152,20 @@ run_supervisor() {
 
 startup="$tmp/startup"
 mkdir -p "$startup/home" "$startup/run"
-printf 'DEFAULT_SESSION=desktop\nNEXT_SESSION=\n' > "$startup/session.conf"
 if run_supervisor "$startup/session.conf" "$startup/trace" "$startup/home" >/dev/null 2>&1 && \
-   grep -qx plasma "$startup/trace" && ! grep -q gamescope "$startup/trace"; then
-    ok 'preferenza KDE avvia Plasma direttamente'
-else no 'default KDE non applicato'; fi
+   grep -qx plasma "$startup/trace" && ! grep -q gamescope "$startup/trace" && \
+   grep -q 'uso KDE come default' "$startup/home/session.log"; then
+    ok 'configurazione assente avvia Plasma con KDE come default'
+else no 'configurazione assente non avvia KDE come default'; fi
+
+invalid_startup="$tmp/invalid-startup"
+mkdir -p "$invalid_startup/home" "$invalid_startup/run"
+printf 'DEFAULT_SESSION=invalid\n' > "$invalid_startup/session.conf"
+if run_supervisor "$invalid_startup/session.conf" "$invalid_startup/trace" "$invalid_startup/home" >/dev/null 2>&1 && \
+   grep -qx plasma "$invalid_startup/trace" && ! grep -q gamescope "$invalid_startup/trace" && \
+   grep -q 'uso KDE come default' "$invalid_startup/home/session.log"; then
+    ok 'configurazione invalida avvia Plasma con KDE come default'
+else no 'configurazione invalida non usa il default KDE'; fi
 
 drm_root="$tmp/drm"
 mkdir -p "$drm_root/card0-DP-1"

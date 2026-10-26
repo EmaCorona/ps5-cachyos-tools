@@ -35,7 +35,7 @@ config="$root/home/steam/.config/ps5-cachyos-tools/session.conf"
 [ ! -e "$config" ] || { [ -f "$config" ] && [ ! -L "$config" ]; } || exit 1
 if [ ! -e "$config" ]; then
     tmp=$(mktemp "$root/home/steam/.config/ps5-cachyos-tools/.session.conf.XXXXXX") || exit 1
-    default=gamescope
+    default=desktop
     legacy="$root/home/steam/.config/ps5-next-session"
     if [ -f "$legacy" ] && [ ! -L "$legacy" ]; then
         IFS= read -r legacy_value < "$legacy" || true
