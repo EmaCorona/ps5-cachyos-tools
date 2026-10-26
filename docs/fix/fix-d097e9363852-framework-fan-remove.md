@@ -27,6 +27,6 @@ Con `CORE_FRAMEWORK_MANAGED=1`, l'hook ora valida il write set, applica soltanto
 - `bash tests/boot-cleanup-tests.sh`: 18 test superati, 0 falliti.
 - `bash tests/run-tests.sh`: 81 test superati, 0 falliti.
 - `git diff --check`: PASS.
-- La rimozione live era stata riprodotta sul sistema PS5 prima della correzione; la riesecuzione live della rimozione e la nuova installazione pulita sono ancora da eseguire dopo la revisione del fix.
+- La rimozione live è stata rieseguita sul sistema PS5 dopo la correzione, seguita dalla pulizia del core e da una nuova installazione pulita di entrambi i moduli; il controller fan è risultato pronto e il profilo `low` è stato applicato.
 
 Fonti primarie: commit [`d097e9363852455e51f01d7a916e2390b0329d54`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/d097e9363852455e51f01d7a916e2390b0329d54) e [`39a26dc256499babd75a38c94d88d14649503968`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/39a26dc256499babd75a38c94d88d14649503968).
