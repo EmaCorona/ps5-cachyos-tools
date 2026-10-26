@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=PS5 Desktop Notifications
+Exec=/usr/local/bin/ps5-cachyos-tools-desktop-notify
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

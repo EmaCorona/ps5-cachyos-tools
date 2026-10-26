@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+set -u
+umask 077
+common=${PS5_SESSION_COMMON:-/usr/local/libexec/ps5-cachyos-tools/session-common.sh}
+[[ -f "$common" && ! -L "$common" ]] || { printf 'session-common.sh mancante\n' >&2; exit 1; }
+# shellcheck source=/dev/null
+source "$common"
+session_file=$PS5_SESSION_CONFIG
+drm_root=${PS5_DRM_SYSFS_ROOT:-/sys/class/drm}
+drm_device=${PS5_DRM_DEVICE:-/dev/dri/card0}
+timeout=${PS5_SESSION_DRM_READY_TIMEOUT_SEC:-30}
+poll=${PS5_SESSION_DRM_POLL_INTERVAL_SEC:-1}
+stable_needed=${PS5_SESSION_DRM_STABLE_SAMPLES:-3}
+gamescope_bin=${PS5_GAMESCOPE_BIN:-/usr/local/libexec/ps5-cachyos-tools/gamescope-session}
+plasma_bin=${PS5_PLASMA_BIN:-/usr/bin/startplasma-wayland}
+fallback_log=${PS5_FALLBACK_LOG:-${HOME:-/home/steam}/.gamescope-fallback.log}
+control_dir="$PS5_SESSION_RUNTIME/ps5-cachyos-tools"
+pgid_file="$control_dir/gamescope.pgid"
+gamescope_pid=''
+valid_uint() { [[ $1 =~ ^[0-9]{1,4}$ ]]; }
+valid_uint "$timeout" && (( timeout >= 1 && timeout <= 600 )) || timeout=30
+valid_uint "$stable_needed" && (( stable_needed >= 1 && stable_needed <= 10 )) || stable_needed=3
+[[ $poll =~ ^[0-9]+([.][0-9]{1,2})?$ ]] || poll=1
+if [[ ${1:-} == --check-config ]]; then ps5_session_read_config "$session_file"; exit $?; fi
+
+if ! ps5_session_read_config "$session_file"; then
+    ps5_session_log error 'configurazione assente o invalida; uso il default sicuro Gamescope'
+    PS5_SESSION_DEFAULT=gamescope PS5_SESSION_NEXT=''
+fi
+requested=${PS5_SESSION_NEXT:-$PS5_SESSION_DEFAULT}
+if [[ -n $PS5_SESSION_NEXT ]]; then
+    ps5_session_write_config "$PS5_SESSION_DEFAULT" '' || ps5_session_log warn 'impossibile consumare l override one-shot'
+fi
+export LIBSEAT_BACKEND=logind
+
+system_stopping() {
+    [[ ${PS5_SYSTEM_STOPPING:-0} == 1 ]] && return 0
+    command -v systemctl >/dev/null 2>&1 || return 1
+    state=$(systemctl is-system-running 2>/dev/null || true)
+    [[ $state == stopping ]] && return 0
+    systemctl list-jobs 2>/dev/null | grep -Eq 'shutdown\.target|reboot\.target|poweroff\.target|halt\.target'
+}
+
+drm_fingerprint() {
+    [[ -e $drm_device ]] || return 1
+    local connector status mode name port fallback=''
+    for connector in "$drm_root"/card*-*; do
+        [[ -r $connector/status && -r $connector/modes ]] || continue
+        status=$(<"$connector/status"); [[ $status == connected ]] || continue
+        IFS= read -r mode < "$connector/modes" || true
+        [[ $mode =~ ^[0-9]{3,5}x[0-9]{3,5}$ ]] || continue
+        name=${connector##*/}; port=${name#card*-}
+        case "$port" in DP-1|HDMI-A-1) printf '%s|%s' "$name" "$mode"; return 0;; esac
+        [[ -n $fallback ]] || fallback="$name|$mode"
+    done
+    [[ -n $fallback ]] || return 1
+    printf '%s' "$fallback"
+}
+
+wait_for_drm() {
+    local started now elapsed previous='' fingerprint stable=0
+    if [[ ${PS5_SESSION_SKIP_DRM_WAIT:-0} == 1 ]]; then ps5_session_log info 'gate DRM saltato per test'; return 0; fi
+    started=$(awk '{print int($1)}' "${PS5_UPTIME_FILE:-/proc/uptime}" 2>/dev/null || date +%s)
+    ps5_session_log info "attesa DRM: device=$drm_device timeout=${timeout}s samples=$stable_needed"
+    while :; do
+        if system_stopping; then return 2; fi
+        if ps5_session_read_config "$session_file" && [[ $PS5_SESSION_NEXT == desktop ]]; then return 3; fi
+        fingerprint=$(drm_fingerprint 2>/dev/null || true)
+        if [[ -n $fingerprint ]]; then
+            if [[ $fingerprint == "$previous" ]]; then stable=$((stable + 1)); else previous=$fingerprint; stable=1; fi
+            if (( stable >= stable_needed )); then ps5_session_log info "DRM pronto: $fingerprint"; return 0; fi
+        else
+            previous=''; stable=0
+        fi
+        now=$(awk '{print int($1)}' "${PS5_UPTIME_FILE:-/proc/uptime}" 2>/dev/null || date +%s)
+        elapsed=$((now - started))
+        if (( elapsed >= timeout )); then ps5_session_log error "timeout DRM dopo ${elapsed}s"; return 1; fi
+        sleep "$poll"
+    done
+}
+
+prepare_kde() {
+    [[ -x $plasma_bin ]] || { ps5_session_log error "KDE non disponibile: $plasma_bin"; return 127; }
+    [[ -r /etc/profile.d/ps5-kde-environment.sh ]] && source /etc/profile.d/ps5-kde-environment.sh
+    unset WAYLAND_DISPLAY DISPLAY
+    export XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=KDE XDG_SESSION_DESKTOP=KDE KDE_SESSION_VERSION=6
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user stop xdg-desktop-portal.service xdg-desktop-portal-gtk.service xdg-desktop-portal-kde.service 2>/dev/null || true
+        systemctl --user import-environment XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP KDE_SESSION_VERSION KWIN_DRM_PREFER_COLOR_DEPTH KWIN_DRM_NO_DIRECT_SCANOUT KWIN_FORCE_ASSUME_HDR_SUPPORT 2>/dev/null || true
+    fi
+    if command -v dbus-update-activation-environment >/dev/null 2>&1 && [[ -n ${DBUS_SESSION_BUS_ADDRESS:-} ]]; then
+        dbus-update-activation-environment --systemd XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP KDE_SESSION_VERSION KWIN_DRM_PREFER_COLOR_DEPTH KWIN_DRM_NO_DIRECT_SCANOUT KWIN_FORCE_ASSUME_HDR_SUPPORT 2>/dev/null || true
+    fi
+    if [[ -x /usr/lib/plasma-dbus-run-session-if-needed && ${PS5_FORCE_TTY1:-0} != 1 ]]; then
+        /usr/lib/plasma-dbus-run-session-if-needed "$plasma_bin"
+    elif [[ -n ${DBUS_SESSION_BUS_ADDRESS:-} || ${PS5_FORCE_TTY1:-0} == 1 ]]; then
+        "$plasma_bin"
+    elif command -v dbus-run-session >/dev/null 2>&1; then
+        dbus-run-session -- "$plasma_bin"
+    else
+        ps5_session_log error 'dbus-run-session assente; impossibile inizializzare Plasma'; return 127
+    fi
+}
+
+cleanup_gamescope() {
+    local attempt
+    command -v systemctl >/dev/null 2>&1 && systemctl --user stop xdg-desktop-portal.service xdg-desktop-portal-gtk.service 2>/dev/null || true
+    [[ ${gamescope_pid:-} =~ ^[0-9]+$ ]] || return 0
+    kill -TERM -- "-$gamescope_pid" 2>/dev/null || true
+    for attempt in 1 2 3 4 5; do
+        kill -0 -- "-$gamescope_pid" 2>/dev/null || break
+        sleep 1
+    done
+    kill -KILL -- "-$gamescope_pid" 2>/dev/null || true
+    rm -f -- "$pgid_file"
+}
+
+fallback_to_kde() {
+    local reason=$1 anomalous=$2 alert
+    if system_stopping; then ps5_session_log info 'shutdown rilevato, fallback annullato'; return 0; fi
+    cleanup_gamescope
+    if [[ $anomalous == 1 ]]; then
+        ps5_session_log error "fallback KDE: $reason"
+        printf '[%s] Gamescope failure: %s\n' "$(date -Is 2>/dev/null || date)" "$reason" >> "$fallback_log" 2>/dev/null || true
+        alert=${PS5_ALERT_FILE:-${XDG_CONFIG_HOME:-${HOME:-/home/steam}/.config}/ps5-cachyos-tools/alert.txt}
+        if [[ ! -e $alert ]]; then
+            mkdir -p "${alert%/*}" 2>/dev/null || true
+            printf 'Gamescope non è riuscito ad avviarsi (%s). È stato avviato KDE; la sessione predefinita resta invariata.\n' "$reason" > "$alert" 2>/dev/null || true
+        fi
+    else
+        ps5_session_log info "Gamescope terminato volontariamente: $reason; avvio KDE senza modificare la preferenza"
+    fi
+    prepare_kde
+}
+
+if [[ $requested == desktop ]]; then ps5_session_log info 'avvio KDE richiesto'; prepare_kde; exit $?; fi
+wait_for_drm
+wait_rc=$?
+case $wait_rc in
+    0) ;;
+    2) ps5_session_log info 'spegnimento durante attesa DRM'; exit 0;;
+    3) ps5_session_log info 'switch manuale a KDE durante attesa DRM'; ps5_session_write_config "$PS5_SESSION_DEFAULT" ''; prepare_kde; exit $?;;
+    *) fallback_to_kde "DRM non pronto entro ${timeout}s" 1; exit $?;;
+esac
+[[ -x $gamescope_bin ]] || { fallback_to_kde "wrapper assente: $gamescope_bin" 1; exit $?; }
+command -v setsid >/dev/null 2>&1 || { fallback_to_kde 'setsid non disponibile' 1; exit $?; }
+ps5_session_log info "avvio Gamescope via $gamescope_bin"
+mkdir -p -- "$control_dir" || { fallback_to_kde 'directory di controllo non disponibile' 1; exit $?; }
+[[ ! -L "$control_dir" ]] || { fallback_to_kde 'directory di controllo non sicura' 1; exit $?; }
+[[ ! -L "$pgid_file" ]] || { fallback_to_kde 'file process group symlinkato' 1; exit $?; }
+rm -f -- "$pgid_file"
+setsid "$gamescope_bin" &
+gamescope_pid=$!
+printf '%s\n' "$gamescope_pid" > "$pgid_file" || { kill -TERM -- "-$gamescope_pid" 2>/dev/null || true; fallback_to_kde 'impossibile creare il controllo process group' 1; exit $?; }
+chmod 0600 "$pgid_file" 2>/dev/null || true
+wait "$gamescope_pid"
+gamescope_rc=$?
+rm -f -- "$pgid_file"
+if system_stopping; then ps5_session_log info 'shutdown dopo Gamescope; non avvio KDE'; exit 0; fi
+if ps5_session_read_config "$session_file" && [[ $PS5_SESSION_NEXT == desktop ]]; then
+    ps5_session_write_config "$PS5_SESSION_DEFAULT" '' || true
+    fallback_to_kde 'switch manuale a KDE' 0
+elif [[ $gamescope_rc -eq 0 ]]; then
+    fallback_to_kde 'uscita normale da Gamescope' 0
+else
+    fallback_to_kde "Gamescope exit=$gamescope_rc" 1
+fi
+exit $?

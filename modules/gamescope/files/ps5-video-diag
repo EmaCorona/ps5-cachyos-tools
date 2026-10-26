@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -u
+drm_root=${PS5_DRM_SYSFS_ROOT:-/sys/class/drm}
+log_file=${PS5_VIDEO_DIAG_LOG:-}
+report() { printf '%s\n' "$*"; [[ -z "$log_file" ]] || printf '[%s] %s\n' "$(date -Is 2>/dev/null || date)" "$*" >> "$log_file" 2>/dev/null || true; }
+report "PS5 video diagnostic: kernel=$(uname -r 2>/dev/null || echo unknown)"
+found=0
+for connector in "$drm_root"/card*-*; do
+    [[ -d "$connector" ]] || continue
+    found=1
+    status=$(cat "$connector/status" 2>/dev/null || echo unknown)
+    enabled=$(cat "$connector/enabled" 2>/dev/null || echo unknown)
+    dpms=$(cat "$connector/dpms" 2>/dev/null || echo unknown)
+    mode=$(head -n 1 "$connector/modes" 2>/dev/null || echo none)
+    report "${connector##*/}: status=$status enabled=$enabled dpms=$dpms preferred_mode=$mode"
+    if [[ $status == connected && -r "$connector/modes" ]]; then report "modes=$(tr '\n' ' ' < "$connector/modes" 2>/dev/null)"; fi
+done
+(( found == 1 )) || report "Nessun connettore DRM trovato in $drm_root"
+if command -v modetest >/dev/null 2>&1; then modetest -M amdgpu -c 2>&1 | head -n 80; else report 'modetest non installato; proprietà KMS non interrogate'; fi
+for process in gamescope steam; do if pgrep -x "$process" >/dev/null 2>&1; then report "$process: attivo"; else report "$process: non attivo"; fi; done
+for file in "${PS5_GAMESCOPE_LOG:-${HOME:-/home/steam}/.gamescope.log}" "${PS5_SESSION_LOG:-${HOME:-/home/steam}/.gamescope-session.log}"; do [[ -f "$file" ]] && report "log=$file ultimo_evento=$(tail -n 1 "$file" 2>/dev/null)"; done

@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -u
+common=${PS5_SESSION_COMMON:-/usr/local/libexec/ps5-cachyos-tools/session-common.sh}
+[[ -f "$common" && ! -L "$common" ]] || { printf 'session-common.sh non disponibile\n' >&2; exit 1; }
+# shellcheck source=/dev/null
+source "$common"
+
+usage() {
+    printf 'Uso: steamos-session-select [gamescope|desktop|plasma] | --default <session> | --once <session>\n' >&2
+}
+scope=default
+if [[ ${1:-} == --default || ${1:-} == --once ]]; then
+    scope=${1#--}; target=${2:-}
+    [[ $# -eq 2 ]] || { usage; exit 2; }
+else
+    target=${1:-desktop}
+    [[ $# -le 1 ]] || { usage; exit 2; }
+fi
+case "$target" in gamescope|gamescope-wayland) target=gamescope;; desktop|plasma) target=desktop;; *) usage; exit 2;; esac
+
+if ps5_session_read_config; then
+    old_default=$PS5_SESSION_DEFAULT old_next=$PS5_SESSION_NEXT
+else
+    old_default=gamescope old_next=''
+    ps5_session_log warn 'configurazione sessione invalida o assente; uso Gamescope come default'
+fi
+if [[ $scope == once ]]; then
+    new_default=$old_default
+    new_next=$target
+else
+    new_default=$target
+    new_next=$target
+fi
+ps5_session_write_config "$new_default" "$new_next" || { printf 'Impossibile salvare la configurazione sessione\n' >&2; exit 1; }
+ps5_session_log info "richiesta=$target tipo=$scope"
+
+current_kde=0
+case ${XDG_CURRENT_DESKTOP:-} in *KDE*) current_kde=1;; esac
+[[ ${KDE_SESSION_VERSION:-} != 6 ]] || current_kde=1
+
+if [[ $target == desktop && $current_kde == 0 ]]; then
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user stop xdg-desktop-portal.service xdg-desktop-portal-kde.service xdg-desktop-portal-gtk.service 2>/dev/null || true
+        systemctl --user unset-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP 2>/dev/null || true
+    fi
+    pgid_file="$PS5_SESSION_RUNTIME/ps5-cachyos-tools/gamescope.pgid"
+    if [[ -f "$pgid_file" && ! -L "$pgid_file" ]]; then
+        IFS= read -r pgid < "$pgid_file" || true
+        if [[ $pgid =~ ^[0-9]+$ ]] && kill -0 -- "-$pgid" 2>/dev/null; then kill -TERM -- "-$pgid" 2>/dev/null || true; fi
+    elif pgrep -u "$(id -u)" -x gamescope >/dev/null 2>&1; then
+        pkill -TERM -u "$(id -u)" -x gamescope 2>/dev/null || true
+    fi
+elif [[ $target == gamescope && $current_kde == 1 ]]; then
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user stop plasma-workspace-wayland.target plasma-core.target xdg-desktop-portal.service xdg-desktop-portal-kde.service xdg-desktop-portal-gtk.service 2>/dev/null || true
+        systemctl --user unset-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP KDE_SESSION_VERSION 2>/dev/null || true
+    fi
+    pkill -TERM -u "$(id -u)" -x plasmashell 2>/dev/null || true
+    pkill -TERM -u "$(id -u)" -x kwin_wayland 2>/dev/null || true
+    pkill -TERM -u "$(id -u)" -x kwin_x11 2>/dev/null || true
+    pkill -TERM -u "$(id -u)" -x Xwayland 2>/dev/null || true
+    if [[ -n ${XDG_SESSION_ID:-} ]] && command -v loginctl >/dev/null 2>&1; then
+        loginctl terminate-session "$XDG_SESSION_ID" 2>/dev/null || true
+    fi
+fi
+exit 0

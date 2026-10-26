@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -u
+steam_dir=${1:-${PS5_STEAM_DIR:-${HOME:-/home/steam}/.local/share/Steam}}
+pkg_dir="$steam_dir/package"
+[[ -d "$pkg_dir" ]] || exit 0
+invalid=0
+for manifest in "$pkg_dir"/*.installed; do
+    [[ -f "$manifest" && ! -L "$manifest" ]] || continue
+    bad=0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ -n "$line" ]] || continue
+        case "$line" in SIGNATURE:*|OSVER=*|VERSION=*|SHA1=*) continue;; esac
+        relative='' expected=''
+        if [[ "$line" == *','*';'* ]]; then
+            first=${line%%;*}; relative=${first%,*}; expected=${first##*,}
+        elif [[ "$line" == *size=* ]]; then
+            relative=${line%%$'\t'*}; expected=${line#*size=}; expected=${expected%%$'\t'*}
+        else
+            continue
+        fi
+        [[ "$relative" != /* && "/$relative/" != *'/../'* && "$expected" =~ ^[0-9]+$ ]] || continue
+        actual=$(stat -c %s -- "$steam_dir/$relative" 2>/dev/null || echo missing)
+        if [[ "$actual" != "$expected" ]]; then bad=1; break; fi
+    done < "$manifest"
+    if (( bad )); then
+        printf 'Steam manifest non integro: %s; rimozione del solo marker .installed per consentire la verifica Steam.\n' "${manifest##*/}" >&2
+        rm -f -- "$manifest" || exit 1
+        invalid=$((invalid + 1))
+    fi
+done
+printf 'Manifest Steam non validi rilevati: %s\n' "$invalid"

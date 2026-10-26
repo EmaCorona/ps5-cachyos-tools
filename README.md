@@ -7,12 +7,12 @@
 
 Framework **modulare di post-installazione, manutenzione e diagnostica** per PS5 Linux. L'orchestratore installa e gestisce funzionalità indipendenti, ciascuna con un proprio manifest, senza dover modificare il core quando si aggiunge un modulo.
 
-Questo branch comprende **due moduli**: `fan`, per il controllo termico continuo a **15 zone**, e `boot-cleanup`, per la pulizia **mirata e conservativa** di specifici residui Steam durante il boot. Il progetto deriva da [PS5 CachyOS Patch](https://github.com/EmaCorona/ps5-cachy-os-patch), ma ne adotta un'architettura e un perimetro funzionale differenti.
+Il progetto comprende moduli indipendenti per il controllo termico (`fan`), il cleanup mirato al boot (`boot-cleanup`) e la sessione grafica (`kde`, `gamescope`, `session`). Deriva da [PS5 CachyOS Patch](https://github.com/EmaCorona/ps5-cachy-os-patch), ma ne adotta un'architettura modulare distinta.
 
 <br>
 
 > [!IMPORTANT]
-> **Ambito e sicurezza**: questi strumenti operano su un'installazione Linux **già esistente**. Non installano CachyOS, non partizionano né formattano dischi, non preparano exploit o bootloader e **non includono** le altre patch del repository originale (rete, Bluetooth, display, Gamescope, KDE o migrazione M.2). Il modulo cleanup non è uno strumento generico di riparazione del boot.
+> **Ambito e sicurezza**: questi strumenti operano su un'installazione Linux **già esistente**. Non installano CachyOS, non partizionano né formattano dischi, non preparano exploit o bootloader e non includono le altre patch del repository originale (rete, Bluetooth o migrazione M.2). Il modulo cleanup non è uno strumento generico di riparazione del boot. Le sessioni grafiche richiedono che Plasma, Gamescope, Steam e il login automatico TTY1 siano già configurati dalla distribuzione.
 
 ---
 
@@ -23,7 +23,7 @@ Questo branch comprende **due moduli**: `fan`, per il controllo termico continuo
 Collega al PC il supporto con PS5 Linux (USB, SSD o NVMe accessibile dall'host) e **monta prima la partizione root**. Negli esempi `/mnt/ps5-root` è un mountpoint reale, non una directory vuota creata per simulare un'installazione.
 
 ```bash
-git clone --branch feature/boot-cleanup-migration --single-branch https://github.com/EmaCorona/ps5-cachyos-tools.git
+git clone --branch feature/kde-gamescope-session-migration --single-branch https://github.com/EmaCorona/ps5-cachyos-tools.git
 cd ps5-cachyos-tools
 
 findmnt /mnt/ps5-root                # verifica che la rootfs sia montata
@@ -33,9 +33,9 @@ sudo ./bin/ps5-cachyos-tools install --root /mnt/ps5-root --dry-run
 sudo ./bin/ps5-cachyos-tools install --root /mnt/ps5-root
 ```
 
-Senza `--module` vengono selezionati **tutti i moduli disponibili** (`fan` e `boot-cleanup`). Il `--dry-run` esegue controlli preliminari e mostra il piano d'installazione senza applicare i moduli. Controlla il target e l'output prima della seconda esecuzione.
+Senza `--module` vengono selezionati **tutti i moduli disponibili**. Il `--dry-run` esegue controlli preliminari e mostra il piano d'installazione senza applicare i moduli. Controlla il target e l'output prima della seconda esecuzione.
 
-**Come funziona la modalità offline:** il framework verifica che `--root` sia un mountpoint assoluto, scrivibile, diverso da `/` e contenente `etc/os-release`; rifiuta i percorsi symlinkati non sicuri. Copia core, manifest, hook, comandi e unit systemd **solo nella rootfs destinazione**. Prepara i collegamenti di abilitazione dei servizi nel target, ma **non esegue i task di boot e non avvia systemd sul PC host**. `boot-cleanup` opererà al primo avvio del sistema destinazione; `fan` sarà gestito dalla relativa unit.
+**Come funziona la modalità offline:** il framework verifica che `--root` sia un mountpoint assoluto, scrivibile, diverso da `/` e contenente `etc/os-release`; rifiuta i percorsi symlinkati non sicuri. Copia core, manifest, hook, comandi e unit systemd **solo nella rootfs destinazione**. Prepara i collegamenti di abilitazione dei servizi nel target, ma **non esegue i task di boot e non avvia systemd sul PC host**. `boot-cleanup` opererà al primo avvio del sistema destinazione; `fan` sarà gestito dalla relativa unit; i profili grafici saranno applicati dal login TTY1 al boot.
 
 Se la partizione di boot è montata separatamente, puoi indicarla in modo esplicito:
 
@@ -43,14 +43,14 @@ Se la partizione di boot è montata separatamente, puoi indicarla in modo esplic
 sudo ./bin/ps5-cachyos-tools install --root /mnt/ps5-root --boot /mnt/ps5-boot
 ```
 
-`--boot` è opzionale per **entrambi i moduli attuali**, che non richiedono modifiche alla partizione di boot. L'orchestratore **non rileva automaticamente** root e boot e non monta le partizioni al posto dell'utente.
+`--boot` è opzionale per i moduli correnti, che non richiedono modifiche alla partizione di boot. L'orchestratore **non rileva automaticamente** root e boot e non monta le partizioni al posto dell'utente.
 
 ### 2. Installazione Direttamente da PS5 Linux (Live)
 
 Su PS5 Linux già avviato, clona il branch e installa sulla root del sistema attuale. **`--dry-run` e `install` non sono due installazioni**: il primo controlla il piano senza applicarlo, il secondo installa davvero.
 
 ```bash
-git clone --branch feature/boot-cleanup-migration --single-branch https://github.com/EmaCorona/ps5-cachyos-tools.git
+git clone --branch feature/kde-gamescope-session-migration --single-branch https://github.com/EmaCorona/ps5-cachyos-tools.git
 cd ps5-cachyos-tools
 
 ./bin/ps5-cachyos-tools list
@@ -58,12 +58,13 @@ sudo ./bin/ps5-cachyos-tools install --live --dry-run
 sudo ./bin/ps5-cachyos-tools install --live
 ```
 
-Senza `--module` vengono installati **entrambi i moduli**, mentre `--live` indica che il target è la PS5 attualmente avviata (`/`), non una rootfs montata su un altro computer. Sono richiesti i privilegi amministrativi e il riconoscimento della piattaforma PS5.
+Senza `--module` vengono installati **tutti i moduli disponibili**, mentre `--live` indica che il target è la PS5 attualmente avviata (`/`), non una rootfs montata su un altro computer. Sono richiesti i privilegi amministrativi e il riconoscimento della piattaforma PS5.
 
 | Modulo | Installazione | Attivazione |
 | :--- | :--- | :--- |
 | **`fan`** | Immediata | `ps5-fan-daemon.service` viene abilitato e avviato subito nella normale installazione live, se i controlli riescono. Continuerà a funzionare tramite systemd. |
 | **`boot-cleanup`** | Immediata | L'hook di pulizia **non viene eseguito dall'installazione**: parte normalmente al boot successivo tramite `ps5-tools-early.service`, oppure manualmente con `reapply`. |
+| **`kde`, `gamescope`, `session`** | Immediata | I task verificano gli artefatti al boot normale; il login TTY1 seleziona Gamescope come default e usa KDE come fallback. |
 
 **Verifica immediata:**
 
@@ -115,7 +116,7 @@ Questi comandi sono **alternative**: esegui solo quello relativo al modulo desid
 | :--- | :--- |
 | `--live` | Installa nel sistema **attualmente avviato**; può abilitare e avviare subito i servizi. |
 | `--root ROOT` | Installa su rootfs Linux **già montata**; non avvia i servizi sull'host. Incompatibile con `--live`. |
-| `--boot BOOT` | Mountpoint separato della partizione boot; opzionale per entrambi i moduli attuali. |
+| `--boot BOOT` | Mountpoint separato della partizione boot; opzionale per i moduli attuali. |
 | `--module fan` | Installa o aggiorna soltanto il controller ventole. |
 | `--module boot-cleanup` | Installa o aggiorna soltanto il cleanup al boot. |
 | `--dry-run` | Controlla target, manifest, dipendenze e piano senza modificare i moduli. |
@@ -153,8 +154,11 @@ La struttura separa **orchestrazione**, **implementazione dei moduli** e **runti
 | :--- | :--- | :--- |
 | **[`fan`](docs/modules/fan.md)** | `service` · `always` | Installa e gestisce `ps5-fan-daemon.service`: profili `low`, `balanced` e `high`, curva dinamica a 15 zone, lettura APU/Tctl, protezione di emergenza, diagnostica e cambio profilo senza restart. |
 | **[`boot-cleanup`](docs/modules/boot-cleanup.md)** | `task` · `early` · `always` | Analizza esclusivamente record Steam allowlistati, verifica PID, identità del processo e proprietario, rimuove i soli file stale autorizzati e registra un resoconto del boot. Non termina processi né effettua pulizie globali. |
+| **[`kde`](docs/modules/kde.md)** | `task` · `normal` · `always` | Predispone variabili KWin DRM, gruppi grafici e notifiche senza eliminare preferenze display personali. |
+| **[`gamescope`](docs/modules/gamescope.md)** | `task` · `normal` · `always` | Rileva modalità DRM, avvia Steam su Gamescope, valida override e offre diagnostica video e integrità Steam. |
+| **[`session`](docs/modules/session.md)** | `task` · `normal` · `always` | Coordina TTY1, preferenza Gamescope/KDE, switch bidirezionale e fallback KDE; dipende da KDE e Gamescope. |
 
-I due moduli **non hanno dipendenze reciproche**. Ogni modulo espone il proprio manifest e può essere installato selettivamente. La directory `modules/_template/` offre un punto di partenza per nuove integrazioni.
+Ogni modulo espone il proprio manifest e può essere installato selettivamente. `session` seleziona automaticamente le dipendenze `kde` e `gamescope`; nessuno dei tre grafici modifica `fan` o `boot-cleanup`. La directory `modules/_template/` offre un punto di partenza per nuove integrazioni.
 
 ### Avvio Automatico e Politiche di Esecuzione
 
@@ -475,7 +479,8 @@ La suite comprende test con sensori e `target_temp` simulati, profili, stati ter
 - **Target:** PS5 con una distribuzione Linux già installata, Bash, systemd e gli strumenti di base usati dagli script. Il controller fan richiede un'interfaccia kernel `ps5-fan/target_temp` e sensori supportati.
 - **Installazione offline:** host Linux con privilegi amministrativi, `git` per ottenere il repository, utilità standard (`findmnt`, `flock`, `realpath` e coreutils) e rootfs **già montata**.
 - **Partizione di boot:** opzionale per `fan` e `boot-cleanup`; il progetto non formatta, migra o ripara automaticamente partizioni.
-- **Perimetro:** nessuna modifica automatica della sessione grafica, di Gamescope/KDE o della configurazione di rete. Il cleanup non sostituisce `fsck`, un recupero di sistema o la diagnosi di errori hardware.
+- **Sessioni grafiche:** i test automatici non sostituiscono prove su PS5 con display collegato. Il software rileva readiness DRM ed errori di processo, ma non artefatti di colore né la qualità effettiva dell'handshake HDMI.
+- **Perimetro:** nessuna modifica automatica alla configurazione di rete. Il cleanup non sostituisce `fsck`, un recupero di sistema o la diagnosi di errori hardware.
 
 ---
 
