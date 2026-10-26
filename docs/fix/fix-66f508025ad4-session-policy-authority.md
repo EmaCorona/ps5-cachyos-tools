@@ -1,5 +1,7 @@
 # Session boot policy authority
 
+Commit sorgente: [`66f508025ad4`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/66f508025ad4) — 2026-10-26.
+
 
 ## Problema
 

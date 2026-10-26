@@ -1,6 +1,6 @@
 # Registro fix
 
-- 2026-10-26 — [`session-policy-authority`](fix-session-policy-authority.md): selezione boot esclusivamente dalla policy versionata, indipendente dalle preferenze persistenti e dal selettore legacy.
+- 2026-10-26 — [`66f508025ad4`](fix-66f508025ad4-session-policy-authority.md): selezione boot esclusivamente dalla policy versionata, indipendente dalle preferenze persistenti e dal selettore legacy.
 
 - 2026-10-26 — [`d097e93`](fix-d097e9363852-framework-fan-remove.md): rimozione live del modulo fan coordinata con la disabilitazione systemd del framework.
 
