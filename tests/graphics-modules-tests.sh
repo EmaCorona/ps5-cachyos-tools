@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 7671)
-Total output lines: 464
-
 #!/usr/bin/env bash
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -223,7 +220,54 @@ drm_pid=$!
 for _ in {1..100}; do grep -q 'attesa DRM' "$drm_switch/home/session.log" 2>/dev/null && break; sleep 0.05; done
 drm_ok=1
 grep -q 'attesa DRM' "$drm_switch/home/session.log" 2>/dev/null || drm_ok=0
-PS5_SESSION_RUNTIME="$drm_switch/run" PS5_SESSION_COMMON="$COMMON" "$SELECT" --once desktop…671 tokens truncated…then
+PS5_SESSION_RUNTIME="$drm_switch/run" PS5_SESSION_COMMON="$COMMON" "$SELECT" --once desktop >/dev/null 2>&1 || drm_ok=0
+wait "$drm_pid" 2>/dev/null || true
+grep -qx plasma "$drm_switch/trace" 2>/dev/null || drm_ok=0
+if (( drm_ok )); then ok 'richiesta live KDE viene rilevata durante l’attesa DRM'; else cat "$drm_switch/home/supervisor.out" "$drm_switch/home/session.log" "$drm_switch/trace" >&2 2>/dev/null; no 'richiesta durante attesa DRM'; fi
+
+write_gamescope_policy() {
+    cp "$SUPERVISOR" "${1%/*}/session-supervisor"
+    cat > "$1" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' gamescope
+EOF
+    chmod 0755 "$1"
+}
+
+run_supervisor() {
+    local config=$1 trace=$2 home=$3
+    local policy="$home/session-policy"
+    cp "$SUPERVISOR" "$home/session-supervisor"
+    if [[ ! -x $policy ]]; then cp "$ROOT/modules/session/files/session-policy" "$policy"; chmod 0755 "$policy"; fi
+    PS5_SESSION_CONFIG="$config" PS5_SESSION_RUNTIME="$home/run" PS5_SESSION_COMMON="$COMMON" \
+      PS5_SESSION_LOG="$home/session.log" PS5_FALLBACK_LOG="$home/fallback.log" PS5_ALERT_FILE="$home/alert.txt" \
+      PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$trace" HOME="$home" \
+      PS5_FORCE_TTY1=1 PATH="$fakebin:$PATH" "$home/session-supervisor"
+}
+
+startup="$tmp/startup"
+mkdir -p "$startup/home" "$startup/run"
+if run_supervisor "$startup/session.conf" "$startup/trace" "$startup/home" >/dev/null 2>&1 && \
+   grep -qx plasma "$startup/trace" && ! grep -q gamescope "$startup/trace" && \
+   grep -q 'policy repository seleziona desktop' "$startup/home/session.log"; then
+    ok 'policy repository assente config legacy avvia Plasma con default KDE'
+else no 'policy KDE non avvia Plasma'; fi
+
+invalid_startup="$tmp/invalid-startup"
+mkdir -p "$invalid_startup/home" "$invalid_startup/run"
+printf 'DEFAULT_SESSION=invalid\n' > "$invalid_startup/session.conf"
+if run_supervisor "$invalid_startup/session.conf" "$invalid_startup/trace" "$invalid_startup/home" >/dev/null 2>&1 && \
+   grep -qx plasma "$invalid_startup/trace" && ! grep -q gamescope "$invalid_startup/trace" && \
+   grep -q 'policy repository seleziona desktop' "$invalid_startup/home/session.log"; then
+    ok 'configurazione invalida legacy non cambia la policy KDE'
+else no 'configurazione invalida legacy ha cambiato policy'; fi
+
+stale_choice="$tmp/stale-choice"
+mkdir -p "$stale_choice/home" "$stale_choice/run"
+printf 'DEFAULT_SESSION=gamescope\nNEXT_SESSION=gamescope\n' > "$stale_choice/session.conf"
+if run_supervisor "$stale_choice/session.conf" "$stale_choice/trace" "$stale_choice/home" >/dev/null 2>&1 && \
+   grep -qx plasma "$stale_choice/trace" && ! grep -q gamescope "$stale_choice/trace" && \
+   grep -q 'policy repository seleziona desktop' "$stale_choice/home/session.log"; then
     ok 'policy repository KDE prevale su DEFAULT_SESSION e NEXT_SESSION legacy'
 else no 'configurazione legacy ha prevalso sulla policy KDE'; fi
 
