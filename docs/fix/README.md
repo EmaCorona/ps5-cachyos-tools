@@ -1,5 +1,13 @@
 # Registro fix
 
+- 2026-10-26 — [`d097e93`](fix-d097e9363852-framework-fan-remove.md): rimozione live del modulo fan coordinata con la disabilitazione systemd del framework.
+
+- 2026-10-26 — [`082e173`](fix-082e173-live-ps5-e2e.md): recupero del target PS5 fuori curva e readiness corretto per nuove installazioni live.
+
+- 2026-10-26 — [`611e217`](fix-611e217ec5f-test-runner-mode.md): ripristinato il bit eseguibile del test runner dopo un mode errato nel tree pubblicato.
+- 2026-10-26 — [`d779fa8`](fix-d779fa8-fan-directory-target.md): il modulo fan rifiuta destinazioni-directory e il rollback non lascia residui.
+- 2026-10-26 — [`8b93ac6`](fix-8b93ac65cb9b-boot-cleanup-purge-docs.md): README allineato al comportamento effettivo di `--purge-config` per boot-cleanup.
+
 - 2026-10-24 — [`0853437`](fix-085343759bd7-architecture-security-review.md): hardening architetturale, isolamento rootfs/live, manifest, rollback selettivo e recovery reapply.
 
 - 2026-10-24 — [`ed240b2`](fix-modular-final-hardening-v2.md): root live, dipendenze selettive, stato once/always, service, rollback, lock condiviso, CLI e regressioni concorrenti.

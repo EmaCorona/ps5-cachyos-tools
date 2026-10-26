@@ -18,9 +18,9 @@ jobs:
       - name: Install static tools
         run: sudo apt-get update && sudo apt-get install --no-install-recommends -y shellcheck systemd
       - name: Bash syntax
-        run: bash -n bin/ps5-fan bin/ps5-fan-daemon bin/ps5-temp lib/modules/fan.sh bin/ps5-cachyos-tools lib/core/*.sh modules/fan/*.sh tests/run-tests.sh tests/core/run-tests.sh tests/core/r4-tests.sh
+        run: bash -n bin/ps5-fan bin/ps5-fan-daemon bin/ps5-temp lib/modules/fan.sh bin/ps5-cachyos-tools lib/core/*.sh modules/fan/*.sh modules/boot-cleanup/*.sh tests/run-tests.sh tests/core/run-tests.sh tests/core/r4-tests.sh tests/boot-cleanup-tests.sh
       - name: ShellCheck
-        run: shellcheck --severity=error bin/ps5-fan bin/ps5-fan-daemon bin/ps5-temp lib/modules/fan.sh bin/ps5-cachyos-tools lib/core/*.sh modules/fan/*.sh tests/run-tests.sh tests/core/run-tests.sh tests/core/r4-tests.sh
+        run: shellcheck --severity=error bin/ps5-fan bin/ps5-fan-daemon bin/ps5-temp lib/modules/fan.sh bin/ps5-cachyos-tools lib/core/*.sh modules/fan/*.sh modules/boot-cleanup/*.sh tests/run-tests.sh tests/core/run-tests.sh tests/core/r4-tests.sh tests/boot-cleanup-tests.sh
       - name: Tests
         run: bash tests/run-tests.sh && bash tests/core/run-tests.sh
       - name: systemd unit syntax

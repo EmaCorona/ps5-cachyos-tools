@@ -34,7 +34,7 @@ core_cli_run_remove_hook() {
     core_target_validate_final "$root" "/usr/lib/ps5-cachyos-tools/modules/$id/remove.sh" "$hook" || return 127
     exec {hook_fd}<"$hook" || return 127; actual=$(readlink -e -- "/proc/self/fd/$hook_fd") || { exec {hook_fd}<&-; return 127; }; [ "$actual" = "$expected" ] || { exec {hook_fd}<&-; return 127; }
     core_target_validate_final "$root" "/usr/lib/ps5-cachyos-tools/modules/$id/remove.sh" "$hook" || { exec {hook_fd}<&-; return 127; }
-    CORE_INSTALL_MODE=$([ "$root" = / ] && echo live || echo offline) CORE_TARGET_ROOT="$root" CORE_MODULE_ID="$id" bash "/proc/self/fd/$hook_fd" "$root" "$keep"; rc=$?; exec {hook_fd}<&-; return "$rc"
+    CORE_INSTALL_MODE=$([ "$root" = / ] && echo live || echo offline) CORE_TARGET_ROOT="$root" CORE_MODULE_ID="$id" CORE_FRAMEWORK_MANAGED=1 bash "/proc/self/fd/$hook_fd" "$root" "$keep"; rc=$?; exec {hook_fd}<&-; return "$rc"
 }
 core_cli_remove_safe() {
     local root=$1 module=$2 live=$3 keep_config=$4 backup service_type hook remove_rc=0 id dep

@@ -3,6 +3,7 @@ set -u
 
 core_txn_lock() {
     local root=$1 lock_dir="$1/run/ps5-cachyos-tools"
+    core_target_prepare_dir "$root" /run/ps5-cachyos-tools >/dev/null || return 1
     core_target_validate_final "$root" /run/ps5-cachyos-tools "$root/run/ps5-cachyos-tools" || return 1
     [ -d "$lock_dir" ] && [ ! -L "$lock_dir" ] || return 1
     core_target_validate_final "$root" /run/ps5-cachyos-tools "$lock_dir" || return 1

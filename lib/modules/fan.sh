@@ -11,6 +11,10 @@ module_fan_install_copy() {
     fi
     if [ -f "$target" ] && cmp -s -- "$source" "$target"; then module_fan_chmod_path "${CORE_TARGET_ROOT:-/}" "${target#"${CORE_TARGET_ROOT:-/}"}" "$mode"; return; fi
     [ ! -L "$target" ] || return 1
+    if [ -e "$target" ] && [ ! -f "$target" ]; then
+        echo "fan: destinazione non regolare: $target" >&2
+        return 1
+    fi
     module_fan_restore_copy "${CORE_TARGET_ROOT:-/}" "${target#"${CORE_TARGET_ROOT:-/}"}" "$source" && module_fan_chmod_path "${CORE_TARGET_ROOT:-/}" "${target#"${CORE_TARGET_ROOT:-/}"}" "$mode"
 }
 
@@ -80,7 +84,7 @@ module_fan_restore_copy() {
     name=$(basename "$path"); tmp=$(mktemp "/proc/self/fd/$fd/.$name.XXXXXX") || { exec {fd}<&-; return 1; }
     rm -f -- "$tmp" || { exec {fd}<&-; return 1; }
     cp -a -- "$source" "$tmp" || { rm -rf -- "$tmp"; exec {fd}<&-; return 1; }
-    mv -f -- "$tmp" "/proc/self/fd/$fd/$name"; rc=$?; [ "$rc" -eq 0 ] || rm -f -- "$tmp"; exec {fd}<&-; return "$rc"
+    mv -fT -- "$tmp" "/proc/self/fd/$fd/$name"; rc=$?; [ "$rc" -eq 0 ] || rm -f -- "$tmp"; exec {fd}<&-; return "$rc"
 }
 
 module_fan_snapshot_copy() {
@@ -112,7 +116,7 @@ module_fan_write_text() {
     actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }
     [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
     name=$(basename "$path"); tmp=$(mktemp "/proc/self/fd/$fd/.$name.XXXXXX") || { exec {fd}<&-; return 1; }
-    printf '%s\n' "$text" > "$tmp" && chmod "$mode" -- "$tmp" && mv -f -- "$tmp" "/proc/self/fd/$fd/$name"; rc=$?; [ "$rc" -eq 0 ] || rm -f -- "$tmp"; exec {fd}<&-; return "$rc"
+    printf '%s\n' "$text" > "$tmp" && chmod "$mode" -- "$tmp" && mv -fT -- "$tmp" "/proc/self/fd/$fd/$name"; rc=$?; [ "$rc" -eq 0 ] || rm -f -- "$tmp"; exec {fd}<&-; return "$rc"
 }
 
 module_fan_link() {
@@ -122,7 +126,7 @@ module_fan_link() {
     expected=$(realpath -e -- "$root$parent") || { exec {fd}<&-; return 1; }
     actual=$(readlink -e -- "/proc/self/fd/$fd") || { exec {fd}<&-; return 1; }
     [ "$actual" = "$expected" ] || { exec {fd}<&-; return 1; }
-    name=$(basename "$path"); ln -s -- "$target" "/proc/self/fd/$fd/$name"; rc=$?; exec {fd}<&-; return "$rc"
+    name=$(basename "$path"); ln -sT -- "$target" "/proc/self/fd/$fd/$name"; rc=$?; exec {fd}<&-; return "$rc"
 }
 
 module_fan_rmdir_path() {
@@ -270,7 +274,7 @@ module_fan_runtime_changed() {
         [ "$actual" = "$expected" ] || { exec {marker_fd}<&-; return 1; }
         marker_tmp=$(mktemp "/proc/self/fd/$marker_fd/.$marker_name.XXXXXX") || { exec {marker_fd}<&-; return 1; }
         printf '1\n' > "$marker_tmp" || { rm -f -- "$marker_tmp"; exec {marker_fd}<&-; return 1; }
-        mv -f -- "$marker_tmp" "/proc/self/fd/$marker_fd/$marker_name" || { rm -f -- "$marker_tmp"; exec {marker_fd}<&-; return 1; }
+        mv -fT -- "$marker_tmp" "/proc/self/fd/$marker_fd/$marker_name" || { rm -f -- "$marker_tmp"; exec {marker_fd}<&-; return 1; }
         exec {marker_fd}<&-
     }
     for path in /usr/lib/ps5-cachyos-tools/fan.sh /usr/local/bin/ps5-fan /usr/local/bin/ps5-fan-daemon /usr/local/bin/ps5-temp /etc/systemd/system/ps5-fan-daemon.service /etc/udev/rules.d/99-ps5-fan.rules; do
@@ -337,7 +341,7 @@ module_fan_wait_ready() {
         cycles=$(awk -F= '$1=="cycles"{print $2}' "$state" 2>/dev/null || true); updated_at=$(awk -F= '$1=="updated_at"{print $2}' "$state" 2>/dev/null || true); instance_id=$(awk -F= '$1=="instance_id"{print $2}' "$state" 2>/dev/null || true)
         now=$(date +%s)
         if [ -r "$state" ] && [ "$cycles" -ge 1 ] 2>/dev/null && [ "$updated_at" -ge "$((now - 300))" ] 2>/dev/null && [ "$updated_at" -le "$now" ] 2>/dev/null && [ -n "$instance_id" ] && [ "$instance_id" != none ] && grep -Eq '^state=(NORMAL|HEATING|EMERGENCY|DEGRADED)$' "$state" && grep -Eq '^profile_applied=(low|balanced|high)$' "$state"; then
-            if [ "$restarted" -eq 1 ]; then [ "$previous_pid" -eq 0 ] && [ -z "$previous_instance" ] && { sleep 1; continue; }; [ "$previous_pid" -eq 0 ] || [ "$pid" -ne "$previous_pid" ] || { sleep 1; continue; }; [ -z "$previous_instance" ] || [ "$instance_id" != "$previous_instance" ] || { sleep 1; continue; }; else [ "$previous_pid" -eq 0 ] || [ "$pid" -eq "$previous_pid" ] || { sleep 1; continue; }; [ -z "$previous_instance" ] || [ "$instance_id" = "$previous_instance" ] || { sleep 1; continue; }; [ "$cycles" -gt "$previous_cycles" ] 2>/dev/null || { sleep 1; continue; }; fi
+            if [ "$restarted" -eq 1 ]; then [ "$previous_pid" -eq 0 ] || [ "$pid" -ne "$previous_pid" ] || { sleep 1; continue; }; [ -z "$previous_instance" ] || [ "$instance_id" != "$previous_instance" ] || { sleep 1; continue; }; else [ "$previous_pid" -eq 0 ] || [ "$pid" -eq "$previous_pid" ] || { sleep 1; continue; }; [ -z "$previous_instance" ] || [ "$instance_id" = "$previous_instance" ] || { sleep 1; continue; }; [ "$cycles" -gt "$previous_cycles" ] 2>/dev/null || { sleep 1; continue; }; fi
             grep -q '^state=DEGRADED$' "$state" && return 2
             return 0
         fi
