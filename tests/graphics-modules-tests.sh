@@ -109,17 +109,18 @@ session_runtime="$tmp/selector/run"
 mkdir -p "${session_config%/*}"
 printf 'DEFAULT_SESSION=gamescope\nNEXT_SESSION=gamescope\n' > "$session_config"
 command_trace="$tmp/selector/commands"
-if PS5_COMMAND_TRACE="$command_trace" PS5_SESSION_CONFIG="$session_config" PS5_SESSION_RUNTIME="$session_runtime" \
+if ! PS5_COMMAND_TRACE="$command_trace" PS5_SESSION_CONFIG="$session_config" PS5_SESSION_RUNTIME="$session_runtime" \
    PS5_SESSION_COMMON="$COMMON" PATH="$fakebin:$PATH" "$SELECT" --default desktop >/dev/null 2>&1 && \
    grep -qx 'DEFAULT_SESSION=gamescope' "$session_config" && grep -qx 'NEXT_SESSION=gamescope' "$session_config" && \
    [ ! -s "$command_trace" ]; then
-    ok 'steamos-session-select è inerte: non modifica preferenze né termina sessioni'
-else no 'selettore legacy ha modificato config o processi'; fi
+    ok 'selettore live senza supervisore fallisce senza modificare il default di boot'
+else no 'selettore senza supervisore ha modificato config o processi'; fi
 
 plasma="$tmp/startplasma-wayland"
 cat > "$plasma" <<'EOF'
 #!/usr/bin/env bash
 printf 'plasma\n' >> "$PS5_TRACE"
+if [[ ${FAKE_PLASMA_WAIT:-0} == 1 ]]; then trap 'exit 0' TERM INT; while :; do sleep 0.1; done; fi
 exit "${PLASMA_RC:-0}"
 EOF
 gamescope_mock="$tmp/gamescope-session"
@@ -130,6 +131,66 @@ if [[ ${FAKE_GAMESCOPE_WAIT:-0} == 1 ]]; then sleep 30; fi
 exit "${FAKE_GAMESCOPE_RC:-0}"
 EOF
 chmod 0755 "$plasma" "$gamescope_mock"
+
+# Live switching is transient and keeps the repository boot policy unchanged.
+live="$tmp/live-switch"
+mkdir -p "$live/home" "$live/run" "$live/home/.config/ps5-cachyos-tools"
+printf 'DEFAULT_SESSION=desktop\nNEXT_SESSION=gamescope\n' > "$live/home/.config/ps5-cachyos-tools/session.conf"
+cp "$live/home/.config/ps5-cachyos-tools/session.conf" "$live/session.conf.expected"
+cp "$SUPERVISOR" "$live/home/session-supervisor"
+cp "$ROOT/modules/session/files/session-policy" "$live/home/session-policy"
+printf '#!/usr/bin/env bash\nprintf desktop\n' > "$live/home/session-policy"
+chmod 0755 "$live/home/session-policy"
+PS5_SESSION_RUNTIME="$live/run" PS5_SESSION_COMMON="$COMMON" PS5_SESSION_LOG="$live/home/session.log" \
+  PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$live/trace" HOME="$live/home" \
+  PS5_FORCE_TTY1=1 FAKE_PLASMA_WAIT=1 FAKE_GAMESCOPE_WAIT=1 PATH="$fakebin:$PATH" \
+  "$live/home/session-supervisor" >"$live/home/supervisor.out" 2>&1 &
+live_pid=$!
+wait_for_trace() {
+    local expected=$1 count=0
+    while (( count < 100 )); do
+        [[ -f "$live/trace" ]] && (( $(grep -xc "$expected" "$live/trace") >= 1 )) && return 0
+        sleep 0.05; count=$((count + 1))
+    done
+    return 1
+}
+live_ok=1
+wait_for_trace plasma || live_ok=0
+if PS5_SESSION_RUNTIME="$live/run" PS5_SESSION_COMMON="$COMMON" PS5_SESSION_LOG="$live/home/duplicate.log" \
+   PS5_SESSION_SUPERVISOR=1 "$live/home/session-supervisor" >/dev/null 2>&1; then live_ok=0; fi
+PS5_SESSION_RUNTIME="$live/run" PS5_SESSION_COMMON="$COMMON" "$SELECT" --default gamescope >/dev/null 2>&1 || live_ok=0
+for _ in {1..100}; do [[ -f "$live/trace" ]] && (( $(grep -xc gamescope "$live/trace") >= 1 )) && break; sleep 0.05; done
+[[ -f "$live/trace" ]] && (( $(grep -xc gamescope "$live/trace") >= 1 )) || live_ok=0
+PS5_SESSION_RUNTIME="$live/run" PS5_SESSION_COMMON="$COMMON" "$SELECT" --once desktop >/dev/null 2>&1 || live_ok=0
+for _ in {1..100}; do [[ -f "$live/trace" ]] && (( $(grep -xc plasma "$live/trace") >= 2 )) && break; sleep 0.05; done
+[[ -f "$live/trace" ]] && (( $(grep -xc plasma "$live/trace") >= 2 )) || live_ok=0
+"$live/home/session-policy" | grep -qx desktop || live_ok=0
+cmp -s "$live/session.conf.expected" "$live/home/.config/ps5-cachyos-tools/session.conf" || live_ok=0
+kill -TERM "$live_pid" 2>/dev/null || true
+wait "$live_pid" 2>/dev/null || true
+if (( live_ok )); then ok 'supervisore consente KDE→Gamescope→KDE senza cambiare policy o session.conf'; else cat "$live/home/supervisor.out" "$live/home/session.log" "$live/trace" >&2 2>/dev/null; no 'transizione live KDE/Gamescope'; fi
+
+# A live request can leave the DRM readiness gate before Gamescope starts.
+drm_switch="$tmp/drm-live-switch"
+mkdir -p "$drm_switch/home" "$drm_switch/run"
+cp "$SUPERVISOR" "$drm_switch/home/session-supervisor"
+cat > "$drm_switch/home/session-policy" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' gamescope
+EOF
+chmod 0755 "$drm_switch/home/session-policy"
+PS5_SESSION_RUNTIME="$drm_switch/run" PS5_SESSION_COMMON="$COMMON" PS5_SESSION_LOG="$drm_switch/home/session.log" \
+  PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$drm_switch/trace" HOME="$drm_switch/home" \
+  PS5_FORCE_TTY1=1 PS5_DRM_DEVICE="$drm_switch/no-card" PS5_SESSION_DRM_READY_TIMEOUT_SEC=60 \
+  PS5_SESSION_DRM_POLL_INTERVAL_SEC=1 PATH="$fakebin:$PATH" "$drm_switch/home/session-supervisor" >"$drm_switch/home/supervisor.out" 2>&1 &
+drm_pid=$!
+for _ in {1..100}; do grep -q 'attesa DRM' "$drm_switch/home/session.log" 2>/dev/null && break; sleep 0.05; done
+drm_ok=1
+grep -q 'attesa DRM' "$drm_switch/home/session.log" 2>/dev/null || drm_ok=0
+PS5_SESSION_RUNTIME="$drm_switch/run" PS5_SESSION_COMMON="$COMMON" "$SELECT" --once desktop >/dev/null 2>&1 || drm_ok=0
+wait "$drm_pid" 2>/dev/null || true
+grep -qx plasma "$drm_switch/trace" 2>/dev/null || drm_ok=0
+if (( drm_ok )); then ok 'richiesta live KDE viene rilevata durante l’attesa DRM'; else cat "$drm_switch/home/supervisor.out" "$drm_switch/home/session.log" "$drm_switch/trace" >&2 2>/dev/null; no 'richiesta durante attesa DRM'; fi
 
 write_gamescope_policy() {
     cp "$SUPERVISOR" "${1%/*}/session-supervisor"

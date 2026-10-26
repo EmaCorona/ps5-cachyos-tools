@@ -1,4 +1,29 @@
 #!/usr/bin/env bash
 set -u
-printf '%s\n' 'steamos-session-select non controlla più l’avvio automatico. Modifica la policy versionata in /usr/local/libexec/ps5-cachyos-tools/session-policy e reinstalla il modulo Session.' >&2
-exit 0
+common=${PS5_SESSION_COMMON:-/usr/local/libexec/ps5-cachyos-tools/session-common.sh}
+[[ -f "$common" && ! -L "$common" ]] || { printf 'session-common.sh non disponibile\n' >&2; exit 1; }
+# shellcheck source=/dev/null
+source "$common"
+
+usage() {
+    printf 'Uso: steamos-session-select [desktop|plasma|gamescope|gamescope-wayland] | --default <session> | --once <session>\n' >&2
+}
+
+if [[ ${1:-} == --default || ${1:-} == --once ]]; then
+    [[ $# -eq 2 ]] || { usage; exit 2; }
+    target=$2
+else
+    [[ $# -le 1 ]] || { usage; exit 2; }
+    target=${1:-desktop}
+fi
+case "$target" in
+    desktop|plasma) target=desktop ;;
+    gamescope|gamescope-wayland) target=gamescope ;;
+    *) usage; exit 2 ;;
+esac
+
+if ! ps5_session_control_request_switch "$target"; then
+    printf 'Supervisore Session non attivo o canale di controllo non disponibile; nessuna modifica al default di boot è stata salvata.\n' >&2
+    exit 1
+fi
+ps5_session_log info "richiesta live=$target inviata al supervisore"
