@@ -21,6 +21,7 @@ drm_device=${PS5_DRM_DEVICE:-/dev/dri/card0}
 timeout=${PS5_SESSION_DRM_READY_TIMEOUT_SEC:-30}
 poll=${PS5_SESSION_DRM_POLL_INTERVAL_SEC:-1}
 stable_needed=${PS5_SESSION_DRM_STABLE_SAMPLES:-3}
+seat_release_timeout=${PS5_SESSION_SEAT_RELEASE_TIMEOUT_SEC:-10}
 gamescope_bin=${PS5_GAMESCOPE_BIN:-/usr/local/libexec/ps5-cachyos-tools/gamescope-session}
 plasma_bin=${PS5_PLASMA_BIN:-/usr/bin/startplasma-wayland}
 fallback_log=${PS5_FALLBACK_LOG:-${HOME:-/home/steam}/.gamescope-fallback.log}
@@ -33,6 +34,7 @@ PS5_SESSION_STOP_REQUESTED=0
 valid_uint() { [[ $1 =~ ^[0-9]{1,4}$ ]]; }
 valid_uint "$timeout" && (( timeout >= 1 && timeout <= 600 )) || timeout=30
 valid_uint "$stable_needed" && (( stable_needed >= 1 && stable_needed <= 10 )) || stable_needed=3
+valid_uint "$seat_release_timeout" && (( seat_release_timeout >= 1 && seat_release_timeout <= 60 )) || seat_release_timeout=10
 [[ $poll =~ ^[0-9]+([.][0-9]{1,2})?$ ]] || poll=1
 
 if [[ ${1:-} == --check-config ]]; then
@@ -161,6 +163,134 @@ terminate_process_group() {
     wait "$pid" 2>/dev/null || true
 }
 
+seat_status_has_device() {
+    local status=$1 card_name=$2
+    awk -v wanted="drm:$card_name" '$NF == wanted { found = 1 } END { exit !found }' <<<"$status"
+}
+
+seat_status_master_line() {
+    local status=$1 card_name=$2
+    awk -v wanted="drm:$card_name" 'index($0, "[MASTER]") && $NF == wanted { print; exit }' <<<"$status"
+}
+
+wait_for_seat_release() {
+    local started=$SECONDS status master_line card_name=${drm_device##*/}
+    command -v loginctl >/dev/null 2>&1 || {
+        ps5_session_log error 'loginctl assente; impossibile verificare il rilascio DRM'
+        return 1
+    }
+    while :; do
+        status=$(loginctl seat-status seat0 --no-pager 2>/dev/null) || {
+            ps5_session_log error 'loginctl non ha restituito lo stato di seat0; Gamescope non verrà avviato'
+            return 1
+        }
+        if ! seat_status_has_device "$status" "$card_name"; then
+            ps5_session_log error "stato seat0 incompleto: device drm:$card_name non identificato; Gamescope non verrà avviato"
+            return 1
+        fi
+        if [[ -z $(seat_status_master_line "$status" "$card_name") ]]; then
+            ps5_session_log info "seat0 rilasciato per $card_name"
+            return 0
+        fi
+        if (( SECONDS - started >= seat_release_timeout )); then
+            master_line=$(seat_status_master_line "$status" "$card_name")
+            ps5_session_log error "timeout rilascio seat0 dopo ${seat_release_timeout}s; owner ancora attivo: ${master_line:-sconosciuto}"
+            return 1
+        fi
+        sleep 0.1 || true
+    done
+}
+
+verify_single_user_session() {
+    local session_id=${XDG_SESSION_ID:-} uid session_user session_class session_seat session_active
+    local sessions user_sessions other_id other_uid other_user other_class line parsed_sessions=0 current_session_listed=0 user_session
+    command -v loginctl >/dev/null 2>&1 || {
+        ps5_session_log error 'loginctl assente; impossibile verificare l’ownership della sessione KDE'
+        return 3
+    }
+    [[ $session_id =~ ^[0-9]{1,10}$ ]] || {
+        ps5_session_log error 'XDG_SESSION_ID mancante o invalido; cleanup KDE annullato per sicurezza'
+        return 3
+    }
+    uid=$(id -u) || return 3
+    session_user=$(loginctl show-session "$session_id" -p User --value 2>/dev/null) || return 3
+    session_class=$(loginctl show-session "$session_id" -p Class --value 2>/dev/null) || return 3
+    session_seat=$(loginctl show-session "$session_id" -p Seat --value 2>/dev/null) || return 3
+    session_active=$(loginctl show-session "$session_id" -p Active --value 2>/dev/null) || return 3
+    if [[ $session_user != "$uid" || $session_class != user || $session_seat != seat0 || $session_active != yes ]]; then
+        ps5_session_log error "sessione KDE non verificabile come sessione attiva su seat0 (id=$session_id); cleanup annullato"
+        return 3
+    fi
+    sessions=$(loginctl list-sessions --no-legend --no-pager 2>/dev/null) || {
+        ps5_session_log error 'elenco sessioni logind non disponibile; cleanup KDE annullato'
+        return 3
+    }
+    user_sessions=$(loginctl show-user "$uid" -p Sessions --value 2>/dev/null) || {
+        ps5_session_log error 'proprietà sessioni dell’utente logind non disponibile; cleanup KDE annullato'
+        return 3
+    }
+    [[ -n ${user_sessions//[[:space:]]/} ]] || {
+        ps5_session_log error 'logind non elenca sessioni per l’utente corrente; cleanup KDE annullato'
+        return 3
+    }
+    declare -A expected_user_sessions=() seen_sessions=()
+    for user_session in $user_sessions; do
+        [[ $user_session =~ ^[0-9]{1,10}$ && -z ${expected_user_sessions[$user_session]+x} ]] || {
+            ps5_session_log error 'proprietà sessioni utente logind malformata; cleanup KDE annullato'
+            return 3
+        }
+        expected_user_sessions[$user_session]=1
+    done
+    [[ -n ${expected_user_sessions[$session_id]+x} ]] || {
+        ps5_session_log error "proprietà sessioni utente logind non include la sessione corrente $session_id; cleanup KDE annullato"
+        return 3
+    }
+    while IFS= read -r line || [[ -n $line ]]; do
+        [[ -z ${line//[[:space:]]/} ]] && continue
+        read -r other_id other_uid _ <<<"$line"
+        [[ $other_id =~ ^[0-9]{1,10}$ && $other_uid =~ ^[0-9]{1,10}$ ]] || {
+            ps5_session_log error 'elenco sessioni logind contiene una riga non valida; cleanup KDE annullato'
+            return 3
+        }
+        [[ -z ${seen_sessions[$other_id]+x} ]] || {
+            ps5_session_log error 'elenco sessioni logind contiene ID duplicati; cleanup KDE annullato'
+            return 3
+        }
+        seen_sessions[$other_id]=$other_uid
+        parsed_sessions=$((parsed_sessions + 1))
+        if [[ $other_uid == "$uid" && -z ${expected_user_sessions[$other_id]+x} ]]; then
+            ps5_session_log error "elenco sessioni logind discordante con le sessioni dell’utente corrente; cleanup KDE annullato"
+            return 3
+        fi
+        if [[ $other_id == "$session_id" ]]; then
+            [[ $other_uid == "$uid" ]] || {
+                ps5_session_log error "elenco sessioni logind assegna un UID inatteso alla sessione corrente; cleanup KDE annullato"
+                return 3
+            }
+            current_session_listed=1
+            continue
+        fi
+        [[ $other_uid == "$uid" ]] || continue
+        other_user=$(loginctl show-session "$other_id" -p User --value 2>/dev/null) || return 3
+        [[ $other_user == "$uid" ]] || continue
+        other_class=$(loginctl show-session "$other_id" -p Class --value 2>/dev/null) || return 3
+        [[ $other_class == manager ]] && continue
+        ps5_session_log error "sessione logind concorrente dello stesso UID (id=$other_id); cleanup KDE annullato"
+        return 3
+    done <<<"$sessions"
+    if (( parsed_sessions == 0 || current_session_listed == 0 )); then
+        ps5_session_log error "elenco sessioni logind vuoto o incompleto (sessione corrente $session_id assente); cleanup KDE annullato"
+        return 3
+    fi
+    for user_session in "${!expected_user_sessions[@]}"; do
+        [[ ${seen_sessions[$user_session]:-} == "$uid" ]] || {
+            ps5_session_log error 'elenco sessioni logind incompleto rispetto alle sessioni dell’utente; cleanup KDE annullato'
+            return 3
+        }
+    done
+    return 0
+}
+
 cleanup_gamescope() {
     command -v systemctl >/dev/null 2>&1 && systemctl --user stop xdg-desktop-portal.service xdg-desktop-portal-gtk.service 2>/dev/null || true
     [[ ${gamescope_pid:-} =~ ^[1-9][0-9]{0,9}$ ]] || return 0
@@ -170,17 +300,15 @@ cleanup_gamescope() {
 }
 
 cleanup_kde() {
-    local pid=$1
+    local pid=$1 stop_rc=0
+    verify_single_user_session || return 3
     if command -v systemctl >/dev/null 2>&1; then
-        systemctl --user stop plasma-workspace-wayland.target plasma-core.target xdg-desktop-portal.service xdg-desktop-portal-kde.service xdg-desktop-portal-gtk.service 2>/dev/null || true
+        systemctl --user stop plasma-workspace-wayland.target plasma-core.target plasma-kwin_wayland.service plasma-plasmashell.service xdg-desktop-portal.service xdg-desktop-portal-kde.service xdg-desktop-portal-gtk.service 2>/dev/null || stop_rc=$?
     fi
     clear_kde_environment
-    pkill -TERM -u "$(id -u)" -x plasmashell 2>/dev/null || true
-    pkill -TERM -u "$(id -u)" -x kwin_wayland 2>/dev/null || true
-    pkill -TERM -u "$(id -u)" -x kwin_wayland_wrapper 2>/dev/null || true
-    pkill -TERM -u "$(id -u)" -x kwin_x11 2>/dev/null || true
-    pkill -TERM -u "$(id -u)" -x Xwayland 2>/dev/null || true
     terminate_process_group "$pid"
+    (( stop_rc == 0 )) || ps5_session_log warning "systemd non ha confermato l'arresto ordinato di KDE (exit=$stop_rc)"
+    wait_for_seat_release
 }
 
 report_gamescope_failure() {
@@ -230,6 +358,11 @@ launch_active_session() {
                     3) return 3 ;;
                     *) report_gamescope_failure "DRM non pronto entro ${timeout}s" 1; requested=desktop; return 4 ;;
                 esac
+            fi
+            if ! wait_for_seat_release; then
+                report_gamescope_failure 'seat DRM ancora occupato o stato non verificabile' 1
+                requested=desktop
+                return 4
             fi
             if [[ ! -x $gamescope_bin ]]; then
                 report_gamescope_failure "wrapper assente: $gamescope_bin" 1
@@ -290,7 +423,20 @@ run_session_manager() {
                 switch_target=$PS5_SESSION_SWITCH_TARGET
                 if [[ $switch_target != "$current_target" ]]; then
                     ps5_session_log info "transizione live richiesta: $current_target -> $switch_target"
-                    stop_active_session "$current_target" "$active_pid"
+                    local stop_rc=0
+                    stop_active_session "$current_target" "$active_pid" || stop_rc=$?
+                    if (( stop_rc == 3 )) && [[ $current_target == desktop && $switch_target == gamescope ]]; then
+                        ps5_session_log warning 'transizione KDE→Gamescope rifiutata: sessione KDE lasciata attiva'
+                        requested=desktop
+                        continue
+                    fi
+                    if (( stop_rc != 0 )) && [[ $current_target == desktop && $switch_target == gamescope ]]; then
+                        report_gamescope_failure 'KDE non ha rilasciato seat0; transizione annullata' 1
+                        requested=desktop
+                        current_target=desktop
+                        session_switched=1
+                        break
+                    fi
                     active_pid=''
                     current_target=$switch_target
                     session_switched=1

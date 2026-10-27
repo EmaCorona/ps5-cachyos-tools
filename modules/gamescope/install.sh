@@ -16,6 +16,7 @@ copy_asset() {
     core_target_copy_file "$root" "$destination" "$source" && core_target_chmod "$root" "$destination" "$mode"
 }
 copy_asset gamescope-session-ps5 /usr/local/libexec/ps5-cachyos-tools/gamescope-session 755 || exit 1
+copy_asset ps5-gamescope-package /usr/local/libexec/ps5-cachyos-tools/gamescope-package 755 || exit 1
 copy_asset ps5-gamescope-display-mode /usr/local/bin/ps5-cachyos-tools-gamescope-display-mode 755 || exit 1
 copy_asset ps5-video-diag /usr/local/bin/ps5-cachyos-tools-video-diag 755 || exit 1
 copy_asset ps5-steam-verify-repair /usr/local/bin/ps5-cachyos-tools-steam-verify-repair 755 || exit 1

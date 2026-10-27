@@ -5,7 +5,8 @@ drm_root=${PS5_DRM_SYSFS_ROOT:-/sys/class/drm}
 drm_device=${PS5_DRM_DEVICE:-/dev/dri/card0}
 config=${PS5_GAMESCOPE_CONFIG:-/etc/ps5-cachyos-tools/gamescope.conf}
 steam=${PS5_STEAM_EXEC:-/usr/bin/steam}
-gamescope=${PS5_GAMESCOPE_EXEC:-/usr/bin/gamescope}
+gamescope=${PS5_GAMESCOPE_EXEC:-/usr/lib/ps5-cachyos-tools/gamescope/bin/gamescope}
+gamescope_scripts=${PS5_GAMESCOPE_SCRIPT_PATH:-/usr/lib/ps5-cachyos-tools/gamescope/share/gamescope/scripts}
 steam_dir=${PS5_STEAM_DIR:-${HOME:-/home/steam}/.local/share/Steam}
 verify_helper=${PS5_STEAM_VERIFY_REPAIR:-/usr/local/bin/ps5-cachyos-tools-steam-verify-repair}
 boot_id=unknown
@@ -34,9 +35,10 @@ log() {
     printf 'gamescope-session: boot_id=%s session_id=%s monotonic_ms=%s %s\n' \
         "$boot_id" "$session_id" "$mono" "$*" >&2
 }
-[[ -x "$gamescope" ]] || { log "Gamescope non disponibile: $gamescope"; exit 70; }
+[[ -x "$gamescope" ]] || { log "Gamescope patchato non disponibile: $gamescope; reinstallare il modulo Gamescope dal repository"; exit 70; }
 [[ -x "$steam" ]] || { log "Steam non disponibile: $steam"; exit 70; }
 [[ -e "$drm_device" ]] || { log "device DRM assente: $drm_device"; exit 71; }
+[[ -d "$gamescope_scripts" ]] || { log "script Gamescope patchati non disponibili: $gamescope_scripts"; exit 70; }
 
 # An absent override means that the best mode exposed by the connected DRM
 # connector and its EDID remains authoritative.
@@ -108,6 +110,7 @@ else
 fi
 export LIBSEAT_BACKEND=logind STEAM_ENABLE_DECK_UI=1 GAMESCOPE_FORCE_GRAB_CURSOR=1
 export XDG_CURRENT_DESKTOP=gamescope XDG_SESSION_TYPE=wayland WLR_DRM_DEVICES="$drm_device"
+export GAMESCOPE_SCRIPT_PATH="$gamescope_scripts"
 export GAMESCOPE_DISPLAY_SUPPORTS_HDR=0 GAMESCOPE_DISPLAY_HDR_ENABLED=0 GAMESCOPE_COLOR_MANAGEMENT_DISABLE=1 STEAM_GAMESCOPE_HDR_SUPPORTED=0 DXVK_HDR=0
 export RADV_DEBUG=${RADV_DEBUG:-nodcc} WLR_DRM_NO_MODIFIERS=1 GAMESCOPE_COMPOSITE_FORCE=1
 stats_path=${PS5_STATS_PATH:-/run/user/$(id -u)/gamescope-stats.json}

@@ -62,4 +62,5 @@ jobs:
             base=$(git rev-parse "$head^" 2>/dev/null || printf '%s' "$empty_tree")
           fi
           git cat-file -e "$head^{commit}"
-          git diff --check "$base" "$head"
+          # Unified diffs embedded as .patch files intentionally contain context whitespace.
+          git diff --check "$base" "$head" -- . ':(exclude)packaging/gamescope/0001-drm-use-preferred-edid-dtd.patch'

@@ -1,0 +1,386 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+PACKAGE_NAME=ps5-cachyos-gamescope
+UPSTREAM_COMMIT=e6674a98118ca7b098b98a3874b8f195ae1bf750
+PATCH_NAME=0001-drm-use-preferred-edid-dtd.patch
+HELPER_NAME=EDIDModeSelection.h
+PRIVATE_BIN=/usr/lib/ps5-cachyos-tools/gamescope/bin/gamescope
+BUILD_INFO=/usr/share/ps5-cachyos-tools/gamescope/build-info
+TRANSACTION_FILE=/var/lib/ps5-cachyos-tools/gamescope/package.transaction
+root=${2:-${CORE_TARGET_ROOT:-}}
+operation=${1:-}
+repo=${CORE_REPO:-}
+pacman_bin=${PS5_GAMESCOPE_PACMAN:-/usr/bin/pacman}
+makepkg_bin=${PS5_GAMESCOPE_MAKEPKG:-/usr/bin/makepkg}
+runuser_bin=${PS5_GAMESCOPE_RUNUSER:-/usr/bin/runuser}
+tmp=''
+target_pkg=''
+build_deps_added=()
+base_gamescope_added=0
+prior_package_version=''
+prior_package_archive=''
+install_attempted=0
+transaction_action=''
+
+write_transaction() {
+    local action=$1 prior_version=$2 prior_archive=$3 base_added=$4 dir tmpfile
+    dir="$root${TRANSACTION_FILE%/*}"
+    mkdir -p "$dir" || return 1
+    [ ! -L "$root$TRANSACTION_FILE" ] || return 1
+    tmpfile=$(mktemp "$dir/.package-install.XXXXXX") || return 1
+    chmod 0600 "$tmpfile" || { rm -f -- "$tmpfile"; return 1; }
+    printf 'format=1\naction=%s\nprior_version=%s\nprior_archive=%s\nbase_gamescope_added=%s\n' \
+        "$action" "$prior_version" "$prior_archive" "$base_added" > "$tmpfile" || { rm -f -- "$tmpfile"; return 1; }
+    mv -f -- "$tmpfile" "$root$TRANSACTION_FILE"
+}
+
+read_transaction() {
+    local line key value
+    prior_package_version='' prior_package_archive='' base_gamescope_added=0 transaction_action=''
+    [ -f "$root$TRANSACTION_FILE" ] && [ ! -L "$root$TRANSACTION_FILE" ] || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+        [[ "$line" == *=* ]] || return 1
+        key=${line%%=*}; value=${line#*=}
+        case "$key" in
+            format) [ "$value" = 1 ] || return 1 ;;
+            action) [[ "$value" = install || "$value" = remove ]] || return 1; transaction_action=$value ;;
+            prior_version) [[ -z "$value" || "$value" =~ ^[A-Za-z0-9._+:-]+$ ]] || return 1; prior_package_version=$value ;;
+            prior_archive) [[ -z "$value" || "$value" = "$root/var/cache/pacman/pkg/"* || "$value" = "$root/var/lib/ps5-cachyos-tools/gamescope/packages/"* ]] || return 1; prior_package_archive=$value ;;
+            base_gamescope_added) [[ "$value" = 0 || "$value" = 1 ]] || return 1; base_gamescope_added=$value ;;
+            *) return 1 ;;
+        esac
+    done < "$root$TRANSACTION_FILE"
+    return 0
+}
+
+clear_transaction() {
+    [ ! -e "$root$TRANSACTION_FILE" ] && [ ! -L "$root$TRANSACTION_FILE" ] || rm -f -- "$root$TRANSACTION_FILE"
+}
+
+log() { printf 'ps5-gamescope-package: %s\n' "$*" >&2; }
+fail() { log "errore: $*"; return 1; }
+
+target_pacman() {
+    if [ "$root" = / ]; then "$pacman_bin" "$@"; else "$pacman_bin" --sysroot "$root" "$@"; fi
+}
+
+is_arch_target() {
+    local id='' id_like='' arch=''
+    [ -f "$root/etc/os-release" ] || return 1
+    while IFS='=' read -r key value; do
+        value=${value%\"}; value=${value#\"}
+        case "$key" in ID) id=$value;; ID_LIKE) id_like=$value;; esac
+    done < "$root/etc/os-release"
+    case " $id $id_like " in *" arch "*|*" cachyos "*) ;; *) return 1;; esac
+    if [ -x "$root/usr/bin/pacman-conf" ]; then
+        arch=$("$root/usr/bin/pacman-conf" Architecture 2>/dev/null || true)
+        [ -z "$arch" ] || [ "$arch" = auto ] || [ "$arch" = x86_64 ] || return 1
+    fi
+    [ "$(uname -m)" = x86_64 ]
+}
+
+builder_name() {
+    local candidate=${SUDO_USER:-steam} uid
+    if [ "$(id -u)" -ne 0 ]; then
+        id -un
+        return
+    fi
+    if ! id "$candidate" >/dev/null 2>&1; then candidate=steam; fi
+    uid=$(id -u "$candidate" 2>/dev/null || printf '0')
+    [ "$uid" -gt 0 ] 2>/dev/null || return 1
+    printf '%s\n' "$candidate"
+}
+
+run_as_builder() {
+    local user=$1
+    shift
+    if [ "$(id -u)" -eq 0 ]; then
+        "$runuser_bin" -u "$user" -- "$@"
+    else
+        "$@"
+    fi
+}
+
+preflight() {
+    local build_user src_dir source_info available_kib min_kib=5242880
+    [[ "$root" = /* && -d "$root" && ! -L "$root" ]] || { fail 'root target assoluta non valida'; return 1; }
+    [ -f "$root/etc/os-release" ] || { fail 'target privo di /etc/os-release'; return 1; }
+    is_arch_target || { fail 'il pacchetto Gamescope è supportato solo per target Arch/CachyOS x86_64'; return 1; }
+    [ "$(id -u)" -eq 0 ] || { fail 'l’installazione del pacchetto richiede privilegi amministrativi'; return 1; }
+    [ -x "$pacman_bin" ] || { fail 'pacman non disponibile sul sistema che esegue l’installer'; return 1; }
+    [ -x "$makepkg_bin" ] || { fail 'makepkg non disponibile sul sistema che esegue l’installer'; return 1; }
+    [ -x /usr/bin/chroot ] && [ -x "$root/usr/bin/ldd" ] || { fail 'serve chroot sull’host e ldd nel target per verificare la compatibilità ABI'; return 1; }
+    [ -d "$root/var/lib/pacman/local" ] && [ -f "$root/etc/pacman.conf" ] || { fail 'database/configurazione pacman assente nel target'; return 1; }
+    if [ "$root" != / ]; then
+        target_pacman -Q >/dev/null 2>&1 || { fail 'pacman --sysroot non riesce a leggere il database del target'; return 1; }
+    fi
+    [[ "$repo" = /* && -d "$repo/packaging/gamescope" ]] || { fail 'sorgenti packaging/gamescope non trovati nel checkout'; return 1; }
+    [ -f "$repo/packaging/gamescope/PKGBUILD" ] && [ ! -L "$repo/packaging/gamescope/PKGBUILD" ] || { fail 'PKGBUILD Gamescope assente o non regolare'; return 1; }
+    [ -f "$repo/packaging/gamescope/$PATCH_NAME" ] && [ ! -L "$repo/packaging/gamescope/$PATCH_NAME" ] && \
+        [ -f "$repo/packaging/gamescope/$HELPER_NAME" ] && [ ! -L "$repo/packaging/gamescope/$HELPER_NAME" ] || { fail 'patch EDID o helper di selezione assenti o symlinkati'; return 1; }
+    build_user=$(builder_name) || { fail 'serve un utente non-root per eseguire makepkg'; return 1; }
+    if [ "$(id -u)" -eq 0 ]; then [ -x "$runuser_bin" ] || { fail 'runuser non disponibile per la build non-root'; return 1; }; fi
+    src_dir="$repo/packaging/gamescope"
+    source_info=$(run_as_builder "$build_user" "$makepkg_bin" --printsrcinfo -p "$src_dir/PKGBUILD" 2>/dev/null) || {
+        # makepkg reads PKGBUILD from its working directory; the fallback below is portable across Arch releases.
+        source_info=$(cd "$src_dir" && run_as_builder "$build_user" "$makepkg_bin" --printsrcinfo) || { fail 'makepkg non riesce a validare il PKGBUILD'; return 1; }
+    }
+    grep -q "^pkgname = $PACKAGE_NAME$" <<< "$source_info" || { fail "PKGBUILD non produce $PACKAGE_NAME"; return 1; }
+    available_kib=$(df -Pk "${TMPDIR:-/var/tmp}" | awk 'NR==2 {print $4}')
+    [[ "$available_kib" =~ ^[0-9]+$ ]] && (( available_kib >= min_kib )) || { fail 'spazio temporaneo insufficiente: servono almeno 5 GiB liberi per la build'; return 1; }
+    if ! target_pacman -Q gamescope >/dev/null 2>&1; then
+        target_pacman -Si gamescope >/dev/null 2>&1 || { fail 'Gamescope base non installato e non disponibile nei repository del target'; return 1; }
+    fi
+    log "preflight superato: target=$root builder=$build_user; il pacchetto patchato verrà costruito come $PACKAGE_NAME"
+}
+
+target_package_version() {
+    local package=$1
+    target_pacman -Q "$package" 2>/dev/null | awk 'NR==1 {print $2}'
+}
+
+find_previous_archive() {
+    local version=$1 candidate metadata real_root real_candidate
+    local cache="$root/var/cache/pacman/pkg"
+    local private_cache="$root/var/lib/ps5-cachyos-tools/gamescope/packages"
+    real_root=$(realpath -e -- "$root") || return 1
+    while IFS= read -r candidate; do
+        [ -f "$candidate" ] && [ ! -L "$candidate" ] || continue
+        real_candidate=$(realpath -e -- "$candidate" 2>/dev/null) || continue
+        if [ "$real_root" != / ]; then case "$real_candidate" in "$real_root"/*) ;; *) continue ;; esac; fi
+        metadata=$(target_pacman -Qp "$candidate" 2>/dev/null || true)
+        if [ "$metadata" = "$PACKAGE_NAME $version" ]; then printf '%s\n' "$candidate"; return 0; fi
+    done < <(find "$cache" "$private_cache" -maxdepth 1 -type f \( -name "$PACKAGE_NAME-*.pkg.tar.zst" -o -name "$PACKAGE_NAME-*.pkg.tar.xz" -o -name "$PACKAGE_NAME-*.pkg.tar.gz" \) -print 2>/dev/null | sort -r)
+    return 1
+}
+
+find_built_package() {
+    local candidate metadata
+    while IFS= read -r candidate; do
+        [ -f "$candidate" ] && [ ! -L "$candidate" ] || continue
+        metadata=$(target_pacman -Qp "$candidate" 2>/dev/null) || continue
+        if [[ "$metadata" = "$PACKAGE_NAME "* ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done < <(find "$tmp" -maxdepth 1 -type f \( -name "$PACKAGE_NAME-*.pkg.tar.zst" -o -name "$PACKAGE_NAME-*.pkg.tar.xz" -o -name "$PACKAGE_NAME-*.pkg.tar.gz" \) -print | sort -r)
+    return 1
+}
+
+cleanup_build_dependencies() {
+    local package
+    local -a still_installed=()
+    if [ "${#build_deps_added[@]}" -gt 0 ]; then
+        for package in "${build_deps_added[@]}"; do
+            "$pacman_bin" -Q "$package" >/dev/null 2>&1 && still_installed+=("$package")
+        done
+        build_deps_added=("${still_installed[@]}")
+    fi
+    if [ "${#build_deps_added[@]}" -gt 0 ]; then
+        if ! "$pacman_bin" -R --noconfirm "${build_deps_added[@]}" >/dev/null 2>&1; then
+            log "warning: alcune dipendenze di build appena installate restano presenti perché richieste da altri pacchetti"
+        fi
+    fi
+}
+
+record_build_dependencies() {
+    local pacman_log=$1
+    [ -f "$pacman_log" ] && [ ! -L "$pacman_log" ] || return 0
+    mapfile -t build_deps_added < <(awk '$3 == "installed" && $4 ~ /^[[:alnum:]@._+-]+$/ {print $4}' "$pacman_log" | sort -u)
+}
+
+remove_package() {
+    local current archive
+    [ "$(id -u)" -eq 0 ] || { fail 'la rimozione del pacchetto richiede privilegi amministrativi'; return 1; }
+    [ -x "$pacman_bin" ] || { fail 'pacman non disponibile'; return 1; }
+    [ ! -e "$root$TRANSACTION_FILE" ] || rollback_transaction || return 1
+    current=$(target_package_version "$PACKAGE_NAME" || true)
+    [ -n "$current" ] || { log 'pacchetto patchato non installato'; return 0; }
+    archive=$(find_previous_archive "$current" || true)
+    [ -n "$archive" ] || { fail "rimozione annullabile impossibile: manca l’archivio $PACKAGE_NAME $current"; return 1; }
+    write_transaction remove "$current" "$archive" 0 || { fail 'impossibile registrare la transazione di rimozione pacman'; return 1; }
+    target_pacman -R --noconfirm "$PACKAGE_NAME" || { fail "rimozione pacman fallita per $PACKAGE_NAME $current"; return 1; }
+    clear_transaction || { fail 'impossibile chiudere il journal di rimozione pacman'; return 1; }
+    log "pacchetto patchato rimosso: $PACKAGE_NAME $current"
+}
+
+rollback_transaction_impl() {
+    local current
+    [ -e "$root$TRANSACTION_FILE" ] || return 0
+    read_transaction || { fail 'journal pacman non valido; rollback automatico interrotto'; return 1; }
+    current=$(target_package_version "$PACKAGE_NAME" || true)
+    if [ "$transaction_action" = remove ]; then
+        if [ -z "$current" ]; then
+            [ -f "$prior_package_archive" ] && [ ! -L "$prior_package_archive" ] || { fail 'archivio Gamescope non disponibile per annullare la rimozione'; return 1; }
+            target_pacman -U --noconfirm "$prior_package_archive" || { fail 'ripristino pacman dopo rimozione fallita'; return 1; }
+        fi
+    elif [ -n "$prior_package_version" ]; then
+        [ -f "$prior_package_archive" ] && [ ! -L "$prior_package_archive" ] || { fail 'archivio precedente non disponibile per il rollback pacman'; return 1; }
+        target_pacman -U --noconfirm "$prior_package_archive" || { fail 'ripristino pacman della build precedente fallito'; return 1; }
+    elif [ -n "$current" ]; then
+        target_pacman -R --noconfirm "$PACKAGE_NAME" || { fail 'rimozione pacman della build nuova fallita durante rollback'; return 1; }
+    fi
+    if [ "$base_gamescope_added" = 1 ]; then
+        target_pacman -R --noconfirm gamescope || { fail 'rimozione del Gamescope base aggiunto dalla transazione fallita'; return 1; }
+    fi
+    clear_transaction || { fail 'impossibile eliminare il journal pacman dopo rollback'; return 1; }
+    log 'rollback pacman compensativo completato'
+}
+
+rollback_transaction() {
+    local rc backup
+    if rollback_transaction_impl; then return 0; else rc=$?; fi
+    backup=${CORE_INSTALL_TRANSACTION_BACKUP:-${CORE_REMOVE_BACKUP_ROOT:-}}
+    if [ -n "$backup" ] && [ -d "$backup" ] && [ ! -L "$backup" ] && [ -f "$root$TRANSACTION_FILE" ] && [ ! -L "$root$TRANSACTION_FILE" ]; then
+        cp -p -- "$root$TRANSACTION_FILE" "$backup/.external-gamescope-package.transaction" || log 'ROLLBACK_JOURNAL_COPY_FAILED: consultare database pacman e backup transazione'
+    fi
+    return "$rc"
+}
+
+build_and_install() {
+    local build_user src_dir info missing_deps=() dep pkg metadata installed_version build_version package_info local_archive_dir cached_archive cache_tmp path base_devel_missing=0 build_dep_log tmp_parent
+    local -a install_targets=()
+    src_dir="$repo/packaging/gamescope"
+    build_user=$(builder_name) || { fail 'utente builder non disponibile'; return 1; }
+    tmp_parent=${TMPDIR:-/var/tmp}
+    tmp=$(mktemp -d "${tmp_parent%/}/ps5-cachyos-gamescope-build.XXXXXX") || return 1
+    tmp=$(realpath -e -- "$tmp") || return 1
+    chmod 0755 "$tmp"
+    cp -p -- "$src_dir/PKGBUILD" "$src_dir/$PATCH_NAME" "$src_dir/$HELPER_NAME" "$tmp/" || return 1
+    if [ "$(id -u)" -eq 0 ]; then chown -R "$build_user" "$tmp" || return 1; fi
+    info=$(cd "$tmp" && run_as_builder "$build_user" "$makepkg_bin" --printsrcinfo) || { fail 'impossibile leggere le dipendenze di build'; return 1; }
+    while IFS= read -r dep; do
+        [ -n "$dep" ] || continue
+        "$pacman_bin" -Q "$dep" >/dev/null 2>&1 || missing_deps+=("$dep")
+    done < <(awk '$1 == "makedepends" && $2 == "=" {print $3}' <<< "$info" | sort -u)
+    "$pacman_bin" -Q base-devel >/dev/null 2>&1 || base_devel_missing=1
+    if [ "${#missing_deps[@]}" -gt 0 ] || [ "$base_devel_missing" -eq 1 ]; then
+        [ "$base_devel_missing" -eq 0 ] || install_targets+=(base-devel)
+        install_targets+=("${missing_deps[@]}")
+        build_dep_log="$tmp/pacman-build-tools.log"
+        : > "$build_dep_log" && chmod 0600 "$build_dep_log" || { fail 'impossibile inizializzare il journal pacman delle dipendenze'; return 1; }
+        log "predisposizione temporanea base-devel e dipendenze mancanti: ${missing_deps[*]:-nessuna}"
+        if ! "$pacman_bin" --logfile "$build_dep_log" -S --needed --noconfirm "${install_targets[@]}"; then
+            record_build_dependencies "$build_dep_log"
+            fail 'pacman non è riuscito a predisporre base-devel e le dipendenze di build'
+            return 1
+        fi
+        record_build_dependencies "$build_dep_log"
+    fi
+
+    log "build Gamescope ${PACKAGE_NAME} con makepkg non-root (upstream $UPSTREAM_COMMIT)"
+    if [ "$(id -u)" -eq 0 ]; then chown -R "$build_user" "$tmp"; fi
+    (cd "$tmp" && run_as_builder "$build_user" env MAKEFLAGS=-j2 "$makepkg_bin" --nodeps --force --noconfirm) || { fail 'build makepkg fallita'; return 1; }
+    pkg=$(find_built_package)
+    [ -n "$pkg" ] || { fail 'makepkg non ha prodotto l’archivio pacman atteso'; return 1; }
+    metadata=$(target_pacman -Qp "$pkg" 2>/dev/null) || { fail 'pacman non riconosce l’archivio costruito'; return 1; }
+    [[ "$metadata" = "$PACKAGE_NAME "* ]] || { fail "nome pacchetto build errato: $metadata"; return 1; }
+    build_version=${metadata#* }
+
+    prior_package_version=$(target_package_version "$PACKAGE_NAME" || true)
+    if [ -n "$prior_package_version" ]; then
+        prior_package_archive=$(find_previous_archive "$prior_package_version" || true)
+        installed_version=$prior_package_version
+        if [ "$installed_version" = "$build_version" ]; then
+            package_info="$root$BUILD_INFO"
+            if [ -f "$package_info" ] && grep -qx "upstream_commit=$UPSTREAM_COMMIT" "$package_info" && \
+               grep -qx "patch_sha256=$(sha256sum "$repo/packaging/gamescope/$PATCH_NAME" | cut -d' ' -f1)" "$package_info" && \
+               grep -qx "helper_sha256=$(sha256sum "$repo/packaging/gamescope/$HELPER_NAME" | cut -d' ' -f1)" "$package_info"; then
+                log "build patchata già attiva: $build_version; nessun aggiornamento necessario"
+                return 0
+            fi
+            fail "versione $build_version già installata con fingerprint diverso; incrementare pkgrel prima di aggiornare"
+            return 1
+        fi
+        [ -n "$prior_package_archive" ] || { fail "impossibile aggiornare: manca in cache l’archivio precedente $PACKAGE_NAME $prior_package_version per rollback"; return 1; }
+    fi
+
+    install_attempted=1
+    # The base package provides the WSI layer and its full runtime dependency set.
+    if ! target_pacman -Q gamescope >/dev/null 2>&1; then base_gamescope_added=1; fi
+    for path in var var/lib var/lib/ps5-cachyos-tools var/lib/ps5-cachyos-tools/gamescope; do
+        [ ! -L "$root/$path" ] || { fail "percorso di cache pacman symlinkato: /$path"; return 1; }
+    done
+    local_archive_dir="$root/var/lib/ps5-cachyos-tools/gamescope/packages"
+    mkdir -p "$local_archive_dir" && [ ! -L "$local_archive_dir" ] || { fail 'cache privata Gamescope non disponibile o symlinkata'; return 1; }
+    cached_archive="$local_archive_dir/${pkg##*/}"
+    if [ -L "$cached_archive" ] || { [ -e "$cached_archive" ] && [ ! -f "$cached_archive" ]; }; then
+        fail 'destinazione archivio pacchetto non regolare o symlinkata'; return 1
+    fi
+    cache_tmp=$(mktemp "$local_archive_dir/.package-cache.XXXXXX") || { fail 'impossibile creare file temporaneo nella cache Gamescope'; return 1; }
+    if ! cp -p -- "$pkg" "$cache_tmp" || ! mv -fT -- "$cache_tmp" "$cached_archive"; then
+        rm -f -- "$cache_tmp"
+        fail 'impossibile conservare atomicamente il pacchetto per rollback e rimozione'
+        return 1
+    fi
+    write_transaction install "$prior_package_version" "$prior_package_archive" "$base_gamescope_added" || { fail 'impossibile creare il journal della transazione pacman'; return 1; }
+    if [ "$base_gamescope_added" -eq 1 ]; then
+        target_pacman -S --needed --noconfirm gamescope || {
+            fail 'installazione del Gamescope base richiesta dal pacchetto patchato fallita'
+            rollback_transaction || log 'ROLLBACK_PACMAN_FAILED: journal conservato per il recupero'
+            return 1
+        }
+    fi
+    if ! target_pacman -U --noconfirm "$pkg"; then
+        fail 'pacman ha rifiutato il pacchetto Gamescope patchato'
+        rollback_transaction || log 'ROLLBACK_PACMAN_FAILED: journal conservato per il recupero'
+        return 1
+    fi
+    installed_version=$(target_package_version "$PACKAGE_NAME" || true)
+    package_info="$root$BUILD_INFO"
+    if [ "$installed_version" != "$build_version" ] || [ ! -x "$root$PRIVATE_BIN" ] || \
+       [ ! -f "$package_info" ] || ! grep -qx "upstream_commit=$UPSTREAM_COMMIT" "$package_info" || \
+       ! grep -qx "patch_sha256=$(sha256sum "$repo/packaging/gamescope/$PATCH_NAME" | cut -d' ' -f1)" "$package_info" || \
+       ! grep -qx "helper_sha256=$(sha256sum "$repo/packaging/gamescope/$HELPER_NAME" | cut -d' ' -f1)" "$package_info"; then
+        fail 'verifica post-installazione del pacchetto patchato fallita'
+        rollback_transaction || log 'ROLLBACK_PACMAN_FAILED: journal conservato per il recupero'
+        return 1
+    fi
+    if ! chroot "$root" /usr/bin/ldd -r "$PRIVATE_BIN" > "$tmp/target-ldd.log" 2>&1; then
+        cat "$tmp/target-ldd.log" >&2
+        fail 'il binario Gamescope patchato non risolve le librerie/ABI nel target; rollback del pacchetto'
+        rollback_transaction || log 'ROLLBACK_PACMAN_FAILED: journal conservato per il recupero'
+        return 1
+    fi
+    if ! target_pacman -Ql "$PACKAGE_NAME" | grep -Fq " $PRIVATE_BIN"; then
+        fail 'pacman non attribuisce il binario patchato al pacchetto dedicato'
+        rollback_transaction || log 'ROLLBACK_PACMAN_FAILED: journal conservato per il recupero'
+        return 1
+    fi
+    log "pacchetto patchato installato e verificato: $PACKAGE_NAME $installed_version"
+}
+
+commit_transaction() {
+    [ ! -e "$root$TRANSACTION_FILE" ] && [ ! -L "$root$TRANSACTION_FILE" ] || read_transaction
+}
+
+cleanup() {
+    local status=$?
+    if [ -n "$tmp" ] && [ -d "$tmp" ]; then
+        cleanup_build_dependencies
+        rm -rf -- "$tmp"
+    fi
+    if [ "$status" -ne 0 ] && [ "$install_attempted" -eq 1 ]; then
+        log 'installazione terminata con errore; verificare l’esito pacman riportato sopra'
+    fi
+    return "$status"
+}
+
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+    return 0
+fi
+
+case "$operation" in
+    preflight) preflight ;;
+    install)
+        preflight
+        trap cleanup EXIT
+        build_and_install
+        ;;
+    commit) commit_transaction ;;
+    finalize) clear_transaction ;;
+    rollback) rollback_transaction ;;
+    remove) remove_package ;;
+    *) fail 'operazione attesa: preflight, install, commit, rollback oppure remove'; exit 2 ;;
+esac

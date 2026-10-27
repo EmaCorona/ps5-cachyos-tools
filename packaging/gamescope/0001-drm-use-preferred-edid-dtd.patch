@@ -1,0 +1,184 @@
+diff --git src/Backends/DRMBackend.cpp src/Backends/DRMBackend.cpp
+index c9034b79..7111e775 100644
+--- src/Backends/DRMBackend.cpp
++++ src/Backends/DRMBackend.cpp
+@@ -10,6 +10,7 @@
+ #include <stdlib.h>
+ #include <poll.h>
+ 
++#include <algorithm>
+ #include <atomic>
+ #include <cassert>
+ #include <cinttypes>
+@@ -28,6 +29,7 @@
+ #include <utility>
+ #include <vector>
+ 
++#include "EDIDModeSelection.h"
+ #include "backend.h"
+ #include "color_helpers.h"
+ #include "Utils/Defer.h"
+@@ -375,6 +377,7 @@ namespace gamescope
+ 		CDRMConnector( CDRMBackend *pBackend, drmModeConnector *pConnector );
+ 
+ 		void RefreshState();
++		const drmModeModeInfo *FindMode( int hdisplay, int vdisplay, uint32_t vrefresh );
+ 
+ 		struct ConnectorProperties
+ 		{
+@@ -512,6 +515,7 @@ namespace gamescope
+ 
+ 		CDRMBackend *m_pBackend = nullptr;
+ 		CAutoDeletePtr<drmModeConnector> m_pConnector;
++		std::vector<drmModeModeInfo> m_EdidModes;
+ 
+ 		struct MutableConnectorState
+ 		{
+@@ -1380,7 +1384,7 @@ static bool setup_best_connector(struct drm_t *drm, bool force, bool initial)
+ 	const drmModeModeInfo *mode = nullptr;
+ 	if ( drm->preferred_width != 0 || drm->preferred_height != 0 || drm->preferred_refresh != 0 )
+ 	{
+-		mode = find_mode(best->GetModeConnector(), drm->preferred_width, drm->preferred_height, gamescope::ConvertmHzToHz( drm->preferred_refresh ));
++		mode = best->FindMode( drm->preferred_width, drm->preferred_height, gamescope::ConvertmHzToHz( drm->preferred_refresh ) );
+ 	}
+ 
+ 	if (!mode && best->GetScreenType() == gamescope::GAMESCOPE_SCREEN_TYPE_EXTERNAL) {
+@@ -1388,12 +1392,12 @@ static bool setup_best_connector(struct drm_t *drm, bool force, bool initial)
+ 		if (get_saved_mode(description, mode_info))
+ 		{
+ 			s_ExternalBroadcastRGBMode = mode_info.broadcast_mode;
+-			mode = find_mode(best->GetModeConnector(), mode_info.width, mode_info.height, mode_info.refresh);
++			mode = best->FindMode( mode_info.width, mode_info.height, mode_info.refresh );
+ 		}
+ 	}
+ 
+ 	if (!mode) {
+-		mode = find_mode(best->GetModeConnector(), 0, 0, 0);
++		mode = best->FindMode( 0, 0, 0 );
+ 	}
+ 
+ 	if (!mode) {
+@@ -2484,6 +2488,7 @@ namespace gamescope
+ 			m_Props.Broadcast_RGB            = CDRMAtomicProperty::Instantiate( "Broadcast RGB",          this, *rawProperties );
+ 		}
+ 
++		m_EdidModes.clear();
+ 		ParseEDID();
+ 
+ 		if ( m_Mutable.EdidData != oldEdid )
+@@ -2567,6 +2572,61 @@ namespace gamescope
+ 
+ 		const di_edid *pEdid = di_info_get_edid( pInfo );
+ 
++		// Preserve progressive digital DTDs when a driver filters them from
++		// GETCONNECTOR. libdisplay-info returns the preferred DTD first; keep that
++		// ordering and test each candidate before allowing a modeset.
++		const di_edid_detailed_timing_def *const *pTimings = di_edid_get_detailed_timing_defs( pEdid );
++		if ( pTimings )
++		{
++			for ( size_t i = 0; pTimings[i]; i++ )
++			{
++				const di_edid_detailed_timing_def *pTiming = pTimings[i];
++				if ( pTiming->interlaced || pTiming->signal_type != DI_EDID_DETAILED_TIMING_DEF_SIGNAL_DIGITAL_SEPARATE ||
++					!pTiming->digital_separate || pTiming->pixel_clock_hz <= 0 ||
++					pTiming->horiz_video <= 0 || pTiming->horiz_video > UINT16_MAX ||
++					pTiming->vert_video <= 0 || pTiming->vert_video > UINT16_MAX ||
++					pTiming->horiz_blank <= 0 || pTiming->horiz_blank > UINT16_MAX ||
++					pTiming->vert_blank <= 0 || pTiming->vert_blank > UINT16_MAX ||
++					pTiming->horiz_front_porch <= 0 || pTiming->horiz_front_porch > UINT16_MAX ||
++					pTiming->horiz_sync_pulse <= 0 || pTiming->horiz_sync_pulse > UINT16_MAX ||
++					pTiming->horiz_front_porch + pTiming->horiz_sync_pulse > pTiming->horiz_blank ||
++					pTiming->vert_front_porch <= 0 || pTiming->vert_front_porch > UINT16_MAX ||
++					pTiming->vert_sync_pulse <= 0 || pTiming->vert_sync_pulse > UINT16_MAX ||
++					pTiming->vert_front_porch + pTiming->vert_sync_pulse > pTiming->vert_blank ||
++					pTiming->horiz_video + pTiming->horiz_blank > UINT16_MAX ||
++					pTiming->vert_video + pTiming->vert_blank > UINT16_MAX )
++					continue;
++
++				drmModeModeInfo mode{};
++				mode.clock = static_cast<uint32_t>( ( static_cast<uint64_t>( pTiming->pixel_clock_hz ) + 500 ) / 1000 );
++				mode.hdisplay = pTiming->horiz_video;
++				mode.hsync_start = mode.hdisplay + pTiming->horiz_front_porch;
++				mode.hsync_end = mode.hsync_start + pTiming->horiz_sync_pulse;
++				mode.htotal = mode.hdisplay + pTiming->horiz_blank;
++				mode.vdisplay = pTiming->vert_video;
++				mode.vsync_start = mode.vdisplay + pTiming->vert_front_porch;
++				mode.vsync_end = mode.vsync_start + pTiming->vert_sync_pulse;
++				mode.vtotal = mode.vdisplay + pTiming->vert_blank;
++				const uint64_t totalPixels = (uint64_t)mode.htotal * mode.vtotal;
++				const uint64_t refresh = totalPixels ? ( mode.clock * 1000ull + totalPixels / 2 ) / totalPixels : 0;
++				if ( refresh == 0 || refresh > UINT32_MAX )
++					continue;
++				mode.vrefresh = static_cast<uint32_t>( refresh );
++				mode.type = m_EdidModes.empty() ? DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED : DRM_MODE_TYPE_DRIVER;
++				mode.flags = ( pTiming->digital_separate->sync_horiz_polarity == DI_EDID_DETAILED_TIMING_DEF_SYNC_POSITIVE ? DRM_MODE_FLAG_PHSYNC : DRM_MODE_FLAG_NHSYNC ) |
++					( pTiming->digital_separate->sync_vert_polarity == DI_EDID_DETAILED_TIMING_DEF_SYNC_POSITIVE ? DRM_MODE_FLAG_PVSYNC : DRM_MODE_FLAG_NVSYNC );
++				snprintf( mode.name, sizeof( mode.name ), "%dx%d", mode.hdisplay, mode.vdisplay );
++				const bool duplicate = std::any_of( m_EdidModes.begin(), m_EdidModes.end(), [&]( const drmModeModeInfo &existing )
++				{
++					return existing.clock == mode.clock && existing.hdisplay == mode.hdisplay && existing.hsync_start == mode.hsync_start &&
++						existing.hsync_end == mode.hsync_end && existing.htotal == mode.htotal && existing.vdisplay == mode.vdisplay &&
++						existing.vsync_start == mode.vsync_start && existing.vsync_end == mode.vsync_end && existing.vtotal == mode.vtotal;
++				} );
++				if ( !duplicate )
++					m_EdidModes.push_back( mode );
++			}
++		}
++
+ 		const di_edid_vendor_product *pProduct = di_edid_get_vendor_product( pEdid );
+ 		m_Mutable.szMakePNP[0] = pProduct->manufacturer[0];
+ 		m_Mutable.szMakePNP[1] = pProduct->manufacturer[1];
+@@ -2838,6 +2898,53 @@ namespace gamescope
+ 		}
+ 	}
+ 
++	const drmModeModeInfo *CDRMConnector::FindMode( int hdisplay, int vdisplay, uint32_t vrefresh )
++	{
++		const drmModeModeInfo *mode = find_mode( GetModeConnector(), hdisplay, vdisplay, vrefresh );
++		const bool bPreferNativeEdidMode = hdisplay == 0 && vdisplay == 0 && vrefresh == 0;
++		if ( ( mode && !bPreferNativeEdidMode ) || m_EdidModes.empty() )
++			return mode;
++
++		const drmModeModeInfo *edidMode = gamescope::FindFirstUsableEDIDMode( m_EdidModes,
++			[&]( const drmModeModeInfo &candidate ) -> const drmModeModeInfo *
++			{
++				if ( ( hdisplay && hdisplay != candidate.hdisplay ) || ( vdisplay && vdisplay != candidate.vdisplay ) ||
++					( vrefresh && vrefresh != candidate.vrefresh ) )
++					return nullptr;
++
++				const drmModeModeInfo *enumeratedMode = find_mode( GetModeConnector(), candidate.hdisplay, candidate.vdisplay, candidate.vrefresh );
++				if ( enumeratedMode )
++					return enumeratedMode;
++
++				if ( !g_DRM.pCRTC || !GetProperties().CRTC_ID || !g_DRM.pCRTC->GetProperties().ACTIVE || !g_DRM.pCRTC->GetProperties().MODE_ID )
++					return nullptr;
++
++				uint32_t modeBlob = 0;
++				if ( drmModeCreatePropertyBlob( g_DRM.fd, &candidate, sizeof( candidate ), &modeBlob ) != 0 )
++					return nullptr;
++				defer( drmModeDestroyPropertyBlob( g_DRM.fd, modeBlob ) );
++				drmModeAtomicReq *request = drmModeAtomicAlloc();
++				if ( !request )
++					return nullptr;
++				defer( drmModeAtomicFree( request ) );
++				const auto &crtcProps = g_DRM.pCRTC->GetProperties();
++				int ret = drmModeAtomicAddProperty( request, GetObjectId(), GetProperties().CRTC_ID->GetPropertyId(), g_DRM.pCRTC->GetObjectId() );
++				ret |= drmModeAtomicAddProperty( request, g_DRM.pCRTC->GetObjectId(), crtcProps.ACTIVE->GetPropertyId(), 1 );
++				ret |= drmModeAtomicAddProperty( request, g_DRM.pCRTC->GetObjectId(), crtcProps.MODE_ID->GetPropertyId(), modeBlob );
++				if ( ret < 0 || drmModeAtomicCommit( g_DRM.fd, request, DRM_MODE_ATOMIC_TEST_ONLY | DRM_MODE_ATOMIC_ALLOW_MODESET, nullptr ) != 0 )
++				{
++					drm_log.warnf( "EDID mode candidate %dx%d@%u failed atomic TEST_ONLY; trying the next candidate",
++						candidate.hdisplay, candidate.vdisplay, candidate.vrefresh );
++					return nullptr;
++				}
++
++				drm_log.infof( "EDID mode candidate %dx%d@%u passed atomic TEST_ONLY",
++					candidate.hdisplay, candidate.vdisplay, candidate.vrefresh );
++				return &candidate;
++			} );
++		return edidMode ? edidMode : mode;
++	}
++
+ 	/////////////////////////
+ 	// CDRMFb
+ 	/////////////////////////

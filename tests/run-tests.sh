@@ -7,6 +7,8 @@ if "$ROOT/tests/vram-module-tests.sh"; then ok 'suite modulo VRAM completata'; e
 if CORE_TEST_MODE=1 "$ROOT/tests/graphics-modules-tests.sh"; then ok 'suite moduli grafici completata'; else no 'suite moduli grafici fallita'; fi
 if python3 "$ROOT/tests/kde-display-mode-tests.py"; then ok 'suite rilevamento modalità KDE completata'; else no 'suite rilevamento modalità KDE fallita'; fi
 if python3 "$ROOT/tests/gamescope-display-mode-tests.py"; then ok 'suite rilevamento modalità Gamescope completata'; else no 'suite rilevamento modalità Gamescope fallita'; fi
+if "$ROOT/tests/gamescope-edid-mode-selection-tests.sh"; then ok "suite selezione DTD EDID Gamescope completata"; else no "suite selezione DTD EDID Gamescope fallita"; fi
+if "$ROOT/tests/gamescope-package-tests.sh"; then ok "suite lifecycle package Gamescope completata"; else no "suite lifecycle package Gamescope fallita"; fi
 if python3 "$ROOT/tests/gamescope-steam-verify-repair-tests.py"; then ok 'suite verifica manifesti Steam completata'; else no 'suite verifica manifesti Steam fallita'; fi
 tmp=$(mktemp -d /tmp/ps5-fan-test.XXXXXX); trap 'rm -rf "$tmp"' EXIT
 export PS5_FAN_LOCK_FILE="$tmp/daemon.lock"

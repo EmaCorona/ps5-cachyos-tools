@@ -1,5 +1,16 @@
 # Registro fix
 
+- 2026-10-27 — [`64c2fd6`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/64c2fd6a4ef023402467a0bdc49465c693db60b7): [selezione pacchetto principale Gamescope](fix-gamescope-debug-package-selection.md), escluso l’archivio debug dalla build installabile.
+
+- 2026-10-27 — [`b83135d`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/b83135da2e82aefd5675f7d4b0633055ce2de8ec): [percorso binario Gamescope nel packaging](fix-b83135d-gamescope-meson-binary-path.md), allineato alla directory di build Meson.
+
+- 2026-10-27 — [`7e0fc79`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/7e0fc799e126dd4b5c44a1f35cc2d8aa4b116a6f): [livello di strip della patch Gamescope](fix-7e0fc79-gamescope-patch-strip-level.md), corretto `-p0` per i percorsi completi negli header.
+
+- 2026-10-27 — [`3e190ab`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/3e190ab), [`6395ba3`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/6395ba346a965b916da23d35490a295fb937d9dc), [`93deb1b`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/93deb1bbcb29bc0f5a4a6a8e69008f24fc15bcd6): [dipendenze makepkg di Gamescope](fix-3e190ab-gamescope-makepkg-prerequisites.md), bootstrap temporaneo di `base-devel` e cleanup pacman mirata.
+- 2026-10-27 — [`dfdfe85ed1fc`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/dfdfe85ed1fcf81895fc91630eb7ec7f92323907): [Gamescope all-in-one](fix-dfdfe85ed1fc-gamescope-all-in-one-install.md), installazione e verifica automatica del pacchetto downstream con selezione EDID.
+
+- 2026-10-27 — [`b3844c7`](fix-b3844c740280-gamescope-dynamic-edid-modes.md): Gamescope prova in sequenza i timing EDID accettati dal DRM e mantiene il fallback KMS.
+
 - 2026-10-27 — [`84ffe90`](fix-gamescope-edid-dtd.md): Gamescope può provare il DTD preferito dell’EDID con atomic test-only e mantenere il fallback KMS.
 
 - 2026-10-27 — [`7b93e2d86e2b`](fix-7b93e2d86e2b-generic-gamescope-modes.md): rimosse le preferenze Gamescope automatiche fisse per seguire modalità DRM native e hotplug.

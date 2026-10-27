@@ -1,0 +1,98 @@
+# Maintainer: Maxime Gauduin <alucryd@archlinux.org>
+# Maintainer: Giancarlo Razzolini <grazzolini@archlinux.org>
+# Maintainer: Sven-Hendrik Haase <svenstaro@archlinux.org>
+# Contributor: Samuel "scrufulufugus" Monson <smonson@irbash.net>
+# Contributor: PedroHLC <root@pedrohlc.com>
+
+pkgname=ps5-cachyos-gamescope
+pkgver=3.17.0
+pkgrel=1
+pkgdesc='PS5 CachyOS Gamescope build with dynamic EDID mode selection'
+arch=(x86_64)
+url=https://github.com/ValveSoftware/gamescope
+license=(
+  BSD-2-Clause
+  BSD-3-Clause
+  LicenseRef-Reshade
+)
+depends=(
+  gamescope
+)
+makedepends=(
+  benchmark
+  cmake
+  git
+  glslang
+  meson
+  ninja
+  vulkan-headers
+  wayland-protocols
+  catch2
+)
+source=(
+  git+https://github.com/ValveSoftware/gamescope.git#commit=${pkgver}
+  git+https://gitlab.freedesktop.org/emersion/libdisplay-info.git
+  git+https://gitlab.freedesktop.org/emersion/libliftoff.git
+  git+https://github.com/ValveSoftware/openvr.git
+  git+https://github.com/Joshua-Ashton/reshade.git
+  git+https://github.com/KhronosGroup/SPIRV-Headers.git
+  git+https://github.com/Joshua-Ashton/vkroots.git
+  git+https://gitlab.freedesktop.org/wlroots/wlroots.git
+  0001-drm-use-preferred-edid-dtd.patch
+  EDIDModeSelection.h
+)
+b2sums=('e5f8ca675d1c0fb5f60cf864d4511db82ca1103a3ed9a51b8ea26bcf07055f04ad22ff03d0a73d75cbc76f15198ba19d8c0185e676aa27fa8b3dfba576ae0278'
+        'SKIP'
+        'SKIP'
+        'SKIP'
+        'SKIP'
+        'SKIP'
+        'SKIP'
+        'SKIP'
+        '75bfb17ca3cac3ee8e08ed9d1b29923185e83cdf670ca6b017675e496ea2d2f023bf6888fd399480208b6e48625adcb8d97b66be2abd16b795a96687bac4a2e2'
+        '938fc74af834995d324cafaedab96ce1a21b203a1eadaa554e151bc3a60e1b33e539baf525c76484b6c994b7f5566305a51630b66cdbe72721141be723846a6e')
+
+prepare() {
+  cd gamescope
+
+  meson subprojects download
+
+  for submodule in src/reshade subprojects/{libdisplay-info,libliftoff,openvr,vkroots,wlroots} thirdparty/SPIRV-Headers; do
+    git submodule init ${submodule}
+    git config submodule.${submodule}.url ../${submodule##*/}
+  done
+  git -c protocol.file.allow=always submodule update
+
+  install -Dm 644 "$srcdir/EDIDModeSelection.h" src/Backends/EDIDModeSelection.h
+  patch -Np0 -i "$srcdir/0001-drm-use-preferred-edid-dtd.patch"
+}
+
+build() {
+  arch-meson gamescope build \
+    -Dbindir=lib/ps5-cachyos-tools/gamescope/bin \
+    -Ddatadir=lib/ps5-cachyos-tools/gamescope/share \
+    -Dlibdir=lib/ps5-cachyos-tools/gamescope/lib \
+    -Dforce_fallback_for=glm,stb,libdisplay-info,libliftoff,vkroots \
+    -Dpipewire=enabled
+  meson compile -C build
+}
+
+package() {
+  local private_root="${pkgdir}/usr/lib/ps5-cachyos-tools/gamescope"
+
+  install -Dm 755 build/src/gamescope "${private_root}/bin/gamescope"
+  install -d "${private_root}/share/gamescope"
+  cp -a gamescope/scripts "${private_root}/share/gamescope/"
+  cp -a gamescope/looks "${private_root}/share/gamescope/"
+  install -Dm 644 gamescope/LICENSE -t "${pkgdir}"/usr/share/licenses/${pkgname}/
+  install -d "${pkgdir}/usr/share/ps5-cachyos-tools/gamescope"
+  {
+    printf 'package=%s\n' "${pkgname}"
+    printf 'version=%s-%s\n' "${pkgver}" "${pkgrel}"
+    printf 'upstream_commit=%s\n' e6674a98118ca7b098b98a3874b8f195ae1bf750
+    printf 'patch_sha256=%s\n' "$(sha256sum 0001-drm-use-preferred-edid-dtd.patch | cut -d' ' -f1)"
+    printf 'helper_sha256=%s\n' "$(sha256sum EDIDModeSelection.h | cut -d' ' -f1)"
+  } > "${pkgdir}/usr/share/ps5-cachyos-tools/gamescope/build-info"
+}
+
+# vim: ts=2 sw=2 et:
