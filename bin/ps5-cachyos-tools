@@ -29,19 +29,36 @@ core_cli_run_check_hook() {
     bash "/proc/self/fd/$hook_fd" "$root"; rc=$?; exec {hook_fd}<&-; return "$rc"
 }
 core_cli_run_remove_hook() {
-    local root=$1 id=$2 hook=$3 keep=$4 expected actual hook_fd rc
+    local root=$1 id=$2 hook=$3 keep=$4 operation=${5:-remove} expected actual hook_fd rc
     expected=$(realpath -e -- "$hook") || return 127
     core_target_validate_final "$root" "/usr/lib/ps5-cachyos-tools/modules/$id/remove.sh" "$hook" || return 127
     exec {hook_fd}<"$hook" || return 127; actual=$(readlink -e -- "/proc/self/fd/$hook_fd") || { exec {hook_fd}<&-; return 127; }; [ "$actual" = "$expected" ] || { exec {hook_fd}<&-; return 127; }
     core_target_validate_final "$root" "/usr/lib/ps5-cachyos-tools/modules/$id/remove.sh" "$hook" || { exec {hook_fd}<&-; return 127; }
-    CORE_INSTALL_MODE=$([ "$root" = / ] && echo live || echo offline) CORE_TARGET_ROOT="$root" CORE_MODULE_ID="$id" CORE_FRAMEWORK_MANAGED=1 bash "/proc/self/fd/$hook_fd" "$root" "$keep"; rc=$?; exec {hook_fd}<&-; return "$rc"
+    CORE_INSTALL_MODE=$([ "$root" = / ] && echo live || echo offline) CORE_TARGET_ROOT="$root" CORE_MODULE_ID="$id" CORE_FRAMEWORK_MANAGED=1 bash "/proc/self/fd/$hook_fd" "$root" "$keep" "$operation"; rc=$?; exec {hook_fd}<&-; return "$rc"
+}
+core_cli_run_post_remove_hook() {
+    local root=$1 id=$2 backup=$3 operation=$4 name hook expected actual hook_fd rc
+    name=$(core_registry_field "$id" 17); [ -n "$name" ] || return 0
+    hook="$backup/usr/lib/ps5-cachyos-tools/modules/$id/$name"
+    expected=$(realpath -e -- "$hook") || return 127
+    [ -f "$hook" ] && [ ! -L "$hook" ] && [ -x "$hook" ] || return 127
+    exec {hook_fd}<"$hook" || return 127
+    actual=$(readlink -e -- "/proc/self/fd/$hook_fd") || { exec {hook_fd}<&-; return 127; }
+    [ "$actual" = "$expected" ] || { exec {hook_fd}<&-; return 127; }
+    CORE_INSTALL_MODE=$([ "$root" = / ] && echo live || echo offline) CORE_TARGET_ROOT="$root" CORE_MODULE_ID="$id" CORE_FRAMEWORK_MANAGED=1 CORE_REMOVE_BACKUP_ROOT="$backup" bash "/proc/self/fd/$hook_fd" "$root" "$operation"
+    rc=$?; exec {hook_fd}<&-; return "$rc"
 }
 core_cli_remove_safe() {
-    local root=$1 module=$2 live=$3 keep_config=$4 backup service_type hook remove_rc=0 id dep
+    local root=$1 module=$2 live=$3 keep_config=$4 backup service_type hook remove_rc=0 id dep post_remove_hook
     [ -n "$module" ] || { core_die '--module richiesto'; return 2; }
     if [ "$live" -eq 1 ]; then root=$(core_target_validate_live) || return 1; else root=$(core_target_validate_offline "$root") || return 1; fi
     core_cli_validate_registry_root "$root" || return 1; core_registry_discover "$root/usr/lib/ps5-cachyos-tools/modules" >/dev/null || return 1; core_registry_validate_dependencies || return 1
     [ "${CORE_MODULE[$module]+x}" = x ] || { core_die "modulo inesistente: $module"; return 1; }
+    post_remove_hook=$(core_registry_field "$module" 17)
+    if [ -n "$post_remove_hook" ]; then
+        hook="$root/usr/lib/ps5-cachyos-tools/modules/$module/$post_remove_hook"
+        [ -f "$hook" ] && [ ! -L "$hook" ] && [ -x "$hook" ] || { core_die "post-remove hook non valido: $module/$post_remove_hook"; return 1; }
+    fi
     for id in "${CORE_MODULE_IDS[@]}"; do [ "$id" = "$module" ] && continue; for dep in $(core_registry_field "$id" 6); do [ "$dep" != "$module" ] || { core_die "rimozione bloccata: $id dipende da $module"; return 1; }; done; done
     backup=$(mktemp -d "$root/.ps5-cachyos-tools-remove.XXXXXX") || return 1
     core_remove_snapshot "$root" "$module" "$backup" || { core_log "snapshot remove fallito: $backup"; return 1; }
@@ -52,7 +69,13 @@ core_cli_remove_safe() {
     [ "$remove_rc" -eq 0 ] && core_remove_module_artifacts "$root" "$module" || remove_rc=$?
     if [ "$remove_rc" -eq 0 ]; then core_target_validate_final "$root" "/usr/lib/ps5-cachyos-tools/modules/$module" "$root/usr/lib/ps5-cachyos-tools/modules/$module" || remove_rc=1; core_target_validate_final "$root" "/var/lib/ps5-cachyos-tools/state/modules/$module.state" "$root/var/lib/ps5-cachyos-tools/state/modules/$module.state" || remove_rc=1; fi
     if [ "$remove_rc" -eq 0 ]; then core_target_remove_path "$root" "/usr/lib/ps5-cachyos-tools/modules/$module" 1 || remove_rc=$?; [ "$remove_rc" -eq 0 ] && core_target_remove_path "$root" "/var/lib/ps5-cachyos-tools/state/modules/$module.state" 1 || remove_rc=$?; fi
-    if [ "$remove_rc" -eq 0 ]; then rm -rf -- "$backup"; else core_remove_restore "$root" "$backup" || true; core_service_restore_state "$root" "$module" || true; return "${remove_rc:-1}"; fi
+    if [ "$remove_rc" -eq 0 ]; then core_cli_run_post_remove_hook "$root" "$module" "$backup" remove || remove_rc=$?; fi
+    if [ "$remove_rc" -eq 0 ]; then rm -rf -- "$backup"; else
+        core_cli_run_post_remove_hook "$root" "$module" "$backup" rollback || core_log "ROLLBACK_EXTERNAL_FAILED: post-remove hook modulo=$module"
+        core_remove_restore "$root" "$backup" || core_log "ROLLBACK_FAILED: remove filesystem backup=$backup"
+        core_service_restore_state "$root" "$module" || true
+        return "${remove_rc:-1}"
+    fi
 }
 core_cli_reset_safe() {
     local root=$1 module=$2 live=$3 state content

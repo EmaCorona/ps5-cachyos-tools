@@ -35,11 +35,14 @@ core_install_copy() {
 }
 
 core_install_module_valid() {
-    local root=$1 repo=$2 id=$3 path source target unit check unknown
+    local root=$1 repo=$2 id=$3 path source target unit check unknown post_install_hook post_remove_hook
     local target_conf="$root/usr/lib/ps5-cachyos-tools/modules/$id/module.conf"
     [ -f "$target_conf" ] && [ ! -L "$target_conf" ] && cmp -s -- "$repo/modules/$id/module.conf" "$target_conf" || return 1
     [ "$(stat -c '%a' "$target_conf" 2>/dev/null)" = 644 ] || return 1
-    for path in install.sh boot.sh check.sh remove.sh readiness.sh runtime.sh recover.sh; do
+    post_install_hook=$(core_registry_field "$id" 16)
+    post_remove_hook=$(core_registry_field "$id" 17)
+    for path in install.sh boot.sh check.sh remove.sh readiness.sh runtime.sh recover.sh post-install.sh "$post_install_hook" "$post_remove_hook"; do
+        [ -n "$path" ] || continue
         source="$repo/modules/$id/$path"; target="$root/usr/lib/ps5-cachyos-tools/modules/$id/$path"
         if [ -e "$source" ]; then
             [ -f "$target" ] && [ ! -L "$target" ] && cmp -s -- "$source" "$target" || return 1
@@ -87,7 +90,7 @@ core_install_module_valid() {
 }
 
 core_install_body() {
-    local root=$1 repo=$2 module=${3-} moddir id hook path lock_dir target rc core_src fan_src requires_boot order type identity install_disabled readiness_hook runtime_hook pre_order pre_id
+    local root=$1 repo=$2 module=${3-} moddir id hook path lock_dir target rc core_src fan_src requires_boot order type identity install_disabled readiness_hook runtime_hook post_install_hook post_remove_hook pre_order pre_id
     [ -d "$repo/lib/core" ] && core_src="$repo/lib/core" || core_src="$repo/core"
     [ -f "$repo/lib/modules/fan.sh" ] && fan_src="$repo/lib/modules/fan.sh" || fan_src="$repo/modules/fan.sh"
     CORE_CONFIG_ROOT=${CORE_CONFIG_ROOT:-$root}
@@ -154,7 +157,9 @@ core_install_body() {
     while IFS= read -r id; do [ -n "$id" ] || continue; moddir="$repo/modules/$id"
         [ -d "$moddir" ] || return 1
         [ -f "$moddir/module.conf" ] && [ ! -L "$moddir/module.conf" ] || return 1
-        for hook in install.sh boot.sh check.sh remove.sh readiness.sh runtime.sh recover.sh; do [ ! -L "$moddir/$hook" ] || { core_log "hook symlink non trusted: $id/$hook"; return 1; }; done
+        post_install_hook=$(core_registry_field "$id" 16)
+        post_remove_hook=$(core_registry_field "$id" 17)
+        for hook in install.sh boot.sh check.sh remove.sh readiness.sh runtime.sh recover.sh post-install.sh "$post_install_hook" "$post_remove_hook"; do [ -z "$hook" ] || [ ! -L "$moddir/$hook" ] || { core_log "hook symlink non trusted: $id/$hook"; return 1; }; done
         CORE_REGISTRY_ROOT="$repo/modules" core_registry_discover "$repo/modules" >/dev/null || return 1
         [ "${CORE_MODULE[$id]+x}" = x ] || return 1
         requires_boot=$(core_registry_field "$id" 9)
@@ -175,7 +180,10 @@ core_install_body() {
         fi
         mkdir -p "$root/usr/lib/ps5-cachyos-tools/modules/$id" || return 1
         core_install_copy "$moddir/module.conf" "$root/usr/lib/ps5-cachyos-tools/modules/$id/module.conf" 644 || return 1
-        for hook in install.sh boot.sh check.sh remove.sh readiness.sh runtime.sh recover.sh; do
+        post_install_hook=$(core_registry_field "$id" 16)
+        post_remove_hook=$(core_registry_field "$id" 17)
+        for hook in install.sh boot.sh check.sh remove.sh readiness.sh runtime.sh recover.sh post-install.sh "$post_install_hook" "$post_remove_hook"; do
+            [ -n "$hook" ] || continue
             if [ -e "$moddir/$hook" ]; then
                 [ -f "$moddir/$hook" ] && [ ! -L "$moddir/$hook" ] || { core_log "hook non regolare: $id/$hook"; return 1; }
                 target=$(core_target_path "$root" "/usr/lib/ps5-cachyos-tools/modules/$id/$hook") || return 1
@@ -312,7 +320,7 @@ core_txn_restore() {
 }
 
 core_install_preflight() {
-    local root=$1 repo=$2 module=${3-} id dep moddir type requires_boot unit order readiness_hook runtime_hook boot_transaction boot_root
+    local root=$1 repo=$2 module=${3-} id dep moddir type requires_boot unit order readiness_hook runtime_hook post_install_hook post_remove_hook boot_transaction boot_root enabled install_disabled
     core_registry_discover "$repo/modules" >/dev/null || return 1
     core_registry_validate_dependencies || return 1
     core_registry_validate_owned_paths || return 1
@@ -344,6 +352,43 @@ core_install_preflight() {
         if [ -n "$runtime_hook" ]; then
             [ -f "$moddir/$runtime_hook" ] && [ ! -L "$moddir/$runtime_hook" ] && [ -x "$moddir/$runtime_hook" ] || { core_log "runtime hook non valido: $id/$runtime_hook"; return 1; }
         fi
+        post_install_hook=$(core_registry_field "$id" 16)
+        if [ -n "$post_install_hook" ]; then
+            [ -f "$moddir/$post_install_hook" ] && [ ! -L "$moddir/$post_install_hook" ] && [ -x "$moddir/$post_install_hook" ] || { core_log "post-install hook non valido: $id/$post_install_hook"; return 1; }
+            enabled=$(core_registry_field "$id" 1)
+            install_disabled=$(core_registry_field "$id" 12)
+            if [ "$enabled" = true ] || { [ -n "$module" ] && [ "$install_disabled" = true ]; }; then
+                CORE_REPO="$repo" CORE_INSTALL_MODE="${CORE_INSTALL_MODE:-offline}" CORE_TARGET_ROOT="$root" CORE_MODULE_ID="$id" CORE_FRAMEWORK_MANAGED=1 CORE_DRY_RUN=1 "$moddir/$post_install_hook" "$root" preflight || return $?
+            fi
+        fi
+        post_remove_hook=$(core_registry_field "$id" 17)
+        if [ -n "$post_remove_hook" ]; then
+            [ -f "$moddir/$post_remove_hook" ] && [ ! -L "$moddir/$post_remove_hook" ] && [ -x "$moddir/$post_remove_hook" ] || { core_log "post-remove hook non valido: $id/$post_remove_hook"; return 1; }
+        fi
+    done <<< "$order"
+}
+
+core_install_post_hooks() {
+    local root=$1 repo=$2 module=${3-} action=${4:-install} order id hook enabled install_disabled copied
+    order=$(core_registry_selection_order "$module") || return 1
+    [ "$action" != rollback ] || order=$(tac <<< "$order")
+    while IFS= read -r id; do
+        [ -n "$id" ] || continue
+        hook=$(core_registry_field "$id" 16)
+        [ -n "$hook" ] || continue
+        enabled=$(core_registry_field "$id" 1)
+        install_disabled=$(core_registry_field "$id" 12)
+        if [ "$enabled" != true ] && { [ -z "$module" ] || [ "$install_disabled" != true ]; }; then
+            continue
+        fi
+        copied="$root/usr/lib/ps5-cachyos-tools/modules/$id/$hook"
+        if [ "$action" = rollback ] && { [ ! -e "$copied" ] || [ -L "$copied" ]; }; then continue; fi
+        [ -f "$copied" ] && [ ! -L "$copied" ] && [ -x "$copied" ] && cmp -s -- "$repo/modules/$id/$hook" "$copied" || { core_log "post-install hook installato non verificato: $id/$hook"; return 1; }
+        if ! CORE_REPO="$repo" CORE_INSTALL_MODE="${CORE_INSTALL_MODE:-offline}" CORE_TARGET_ROOT="$root" CORE_MODULE_ID="$id" CORE_RUNTIME_CHANGED_FILE="$root/run/ps5-cachyos-tools/runtime-changed/$id" CORE_INSTALL_TRANSACTION_BACKUP="${CORE_INSTALL_TRANSACTION_BACKUP:-}" CORE_FRAMEWORK_MANAGED=1 CORE_DRY_RUN=0 "$repo/modules/$id/$hook" "$root" "$action"; then
+            core_log "post-install hook $action fallito: $id"
+            [ "$action" != install ] || return 1
+            return 1
+        fi
     done <<< "$order"
 }
 
@@ -357,13 +402,20 @@ core_install() {
     backup=$(mktemp -d "$root/.ps5-cachyos-tools-txn.XXXXXX") || return 1
     core_txn_snapshot "$root" "$backup" "$2" "${3-}" || { core_log 'snapshot transazione fallito'; rm -rf -- "$backup"; return 1; }
     core_service_transaction_snapshot "$root" "${3-}" "$backup" || { core_log 'snapshot servizi fallito'; rm -rf -- "$backup"; return 1; }
-    if core_install_body "$@"; then
+    CORE_INSTALL_TRANSACTION_BACKUP="$backup"
+    if core_install_body "$@" && core_install_post_hooks "$@" install && core_install_post_hooks "$@" commit; then
+        if ! core_install_post_hooks "$@" finalize; then
+            core_log "installazione applicata ma finalizzazione hook fallita; backup conservato in $backup"
+            printf '%s\n' FINALIZE_HOOK_FAILED > "$backup/.rollback-status"
+            return 1
+        fi
         rm -rf -- "$backup"
         return 0
     fi
     core_log 'installazione core fallita: rollback transazione'
+    core_install_post_hooks "$@" rollback || { rollback_status=ROLLBACK_EXTERNAL_FAILED; core_log 'ROLLBACK_EXTERNAL_FAILED: post-install hook'; }
     if core_txn_restore "$root" "$backup"; then
-        rollback_status=ROLLBACK_COMPLETED
+        [ "$rollback_status" = ROLLBACK_EXTERNAL_FAILED ] || rollback_status=ROLLBACK_COMPLETED
     else
         filesystem_restore_failed=1
         core_log "ROLLBACK_PARTIAL: backup conservato in $backup"
@@ -372,7 +424,11 @@ core_install() {
         core_service_transaction_restore "$root" "$backup" || service_rollback_failed=1
     fi
     if [ "$service_rollback_failed" -ne 0 ]; then
-        [ "$filesystem_restore_failed" -eq 0 ] && rollback_status=ROLLBACK_FILES_RESTORED_SERVICE_FAILED || rollback_status=ROLLBACK_FAILED
+        if [ "$filesystem_restore_failed" -ne 0 ] || [ "$rollback_status" = ROLLBACK_EXTERNAL_FAILED ]; then
+            rollback_status=ROLLBACK_FAILED
+        else
+            rollback_status=ROLLBACK_FILES_RESTORED_SERVICE_FAILED
+        fi
     fi
     if [ "$rollback_status" = ROLLBACK_COMPLETED ]; then
         rm -rf -- "$backup"

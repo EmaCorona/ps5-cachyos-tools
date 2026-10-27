@@ -192,6 +192,79 @@ chmod 0755 "$fixture_repo/modules/failure-fixture/install.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$fixture_repo/modules/failure-fixture/boot.sh"; chmod 0755 "$fixture_repo/modules/failure-fixture/boot.sh"
 mkdir -p "$tmp/fail-root/etc"; printf 'ID=linux\nNAME=fixture\n' > "$tmp/fail-root/etc/os-release"
 if ( source "$ROOT/lib/core/log.sh"; source "$ROOT/lib/core/target.sh"; source "$ROOT/lib/core/registry.sh"; source "$ROOT/lib/core/dependencies.sh"; source "$ROOT/lib/core/service.sh"; source "$ROOT/lib/core/installer.sh"; CORE_INSTALL_MODE=offline core_install "$tmp/fail-root" "$fixture_repo" failure-fixture ) >/dev/null 2>&1; then no 'hook failure accettato'; else [ ! -e "$tmp/fail-root/etc/failure-fixture.marker" ] && [ ! -e "$tmp/fail-root/usr/lib/ps5-cachyos-tools" ] && ok 'rollback transazionale rimuove artefatto hook fallito' || no 'rollback transazionale lascia artefatti hook'; fi
+mkdir -p "$fixture_repo/modules/post-hook-fixture"
+cat > "$fixture_repo/modules/post-hook-fixture/module.conf" <<'EOF'
+ID=post-hook-fixture
+NAME=Post install hook fixture
+ENABLED=true
+TYPE=task
+RUN_POLICY=once
+BOOT_PHASE=normal
+REVISION=1
+DEPENDENCIES=
+FAILURE_POLICY=continue
+OWNED_PATHS=/etc/post-hook-fixture.marker
+POST_INSTALL_HOOK=package.sh
+POST_REMOVE_HOOK=remove-package.sh
+EOF
+printf '#!/usr/bin/env bash\nexit 0\n' > "$fixture_repo/modules/post-hook-fixture/install.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$fixture_repo/modules/post-hook-fixture/boot.sh"
+cat > "$fixture_repo/modules/post-hook-fixture/package.sh" <<'EOF'
+#!/usr/bin/env bash
+root=$1; operation=$2
+if [ "$operation" = preflight ]; then [ "${CORE_DRY_RUN:-0}" = 1 ] || exit 41; exit 0; fi
+if [ "$operation" = commit ] || [ "$operation" = finalize ]; then exit 0; fi
+if [ "$operation" = rollback ]; then rm -f "$root/etc/post-hook-fixture.marker"; exit 0; fi
+[ "$operation" = install ] && [ "${CORE_DRY_RUN:-1}" = 0 ] || exit 42
+printf 'installed\n' > "$root/etc/post-hook-fixture.marker"
+EOF
+chmod 0755 "$fixture_repo/modules/post-hook-fixture/"*.sh
+cat > "$fixture_repo/modules/post-hook-fixture/remove-package.sh" <<'EOF'
+#!/usr/bin/env bash
+root=$1; operation=$2
+case "$operation" in
+  remove) printf external > "$root/var/lib/post-remove-external"; exit 31 ;;
+  rollback) rm -f "$root/var/lib/post-remove-external" ;;
+esac
+EOF
+chmod 0755 "$fixture_repo/modules/post-hook-fixture/remove-package.sh"
+mkdir -p "$tmp/post-hook-root/etc"; printf 'ID=linux\nNAME=fixture\n' > "$tmp/post-hook-root/etc/os-release"
+if ( source "$ROOT/lib/core/log.sh"; source "$ROOT/lib/core/target.sh"; source "$ROOT/lib/core/registry.sh"; source "$ROOT/lib/core/dependencies.sh"; source "$ROOT/lib/core/service.sh"; source "$ROOT/lib/core/installer.sh"; CORE_INSTALL_MODE=offline core_install "$tmp/post-hook-root" "$fixture_repo" post-hook-fixture ) >"$tmp/post-hook-install.log" 2>&1 && [ "$(cat "$tmp/post-hook-root/etc/post-hook-fixture.marker")" = installed ] && [ -x "$tmp/post-hook-root/usr/lib/ps5-cachyos-tools/modules/post-hook-fixture/package.sh" ]; then ok 'POST_INSTALL_HOOK dinamico validato, copiato ed eseguito'; else cat "$tmp/post-hook-install.log" >&2; no 'POST_INSTALL_HOOK dinamico non eseguito'; fi
+if "$tmp/post-hook-root/usr/local/bin/ps5-cachyos-tools" remove post-hook-fixture --root "$tmp/post-hook-root" > "$tmp/post-hook-remove.log" 2>&1; then no 'POST_REMOVE_HOOK failure accettato'; elif [ -f "$tmp/post-hook-root/usr/lib/ps5-cachyos-tools/modules/post-hook-fixture/remove-package.sh" ] && [ "$(cat "$tmp/post-hook-root/etc/post-hook-fixture.marker")" = installed ] && [ ! -e "$tmp/post-hook-root/var/lib/post-remove-external" ]; then ok 'POST_REMOVE_HOOK compensa il pacman hook fallito e ripristina il modulo'; else cat "$tmp/post-hook-remove.log" >&2; no 'POST_REMOVE_HOOK rollback non ha ripristinato la transazione'; fi
+for id in post-hook-a post-hook-b; do
+    mkdir -p "$fixture_repo/modules/$id"
+    cat > "$fixture_repo/modules/$id/module.conf" <<EOF
+ID=$id
+NAME=$id
+ENABLED=true
+TYPE=task
+RUN_POLICY=once
+BOOT_PHASE=normal
+REVISION=1
+DEPENDENCIES=$([ "$id" = post-hook-b ] && printf 'post-hook-a')
+FAILURE_POLICY=continue
+POST_INSTALL_HOOK=package.sh
+EOF
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$fixture_repo/modules/$id/install.sh"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$fixture_repo/modules/$id/boot.sh"
+done
+cat > "$fixture_repo/modules/post-hook-a/package.sh" <<'EOF'
+#!/usr/bin/env bash
+case "$2" in preflight|commit|finalize) exit 0;; install) printf external > "$1/var/lib/post-hook-external";; rollback) rm -f "$1/var/lib/post-hook-external";; esac
+EOF
+cat > "$fixture_repo/modules/post-hook-b/package.sh" <<'EOF'
+#!/usr/bin/env bash
+case "$2" in
+  preflight|finalize|rollback) exit 0 ;;
+  install) [ "${HOOK_B_FAIL:-install}" != install ] || exit 29 ;;
+  commit) [ "${HOOK_B_FAIL:-install}" != commit ] || exit 30 ;;
+esac
+EOF
+chmod 0755 "$fixture_repo/modules/post-hook-a/"*.sh "$fixture_repo/modules/post-hook-b/"*.sh
+mkdir -p "$tmp/post-hook-rollback-root/etc"; printf 'ID=linux\nNAME=fixture\n' > "$tmp/post-hook-rollback-root/etc/os-release"
+if ( source "$ROOT/lib/core/log.sh"; source "$ROOT/lib/core/target.sh"; source "$ROOT/lib/core/registry.sh"; source "$ROOT/lib/core/dependencies.sh"; source "$ROOT/lib/core/service.sh"; source "$ROOT/lib/core/installer.sh"; CORE_INSTALL_MODE=offline core_install "$tmp/post-hook-rollback-root" "$fixture_repo" post-hook-b ) >/dev/null 2>&1; then no 'fallimento post-hook successivo accettato'; elif [ ! -e "$tmp/post-hook-rollback-root/var/lib/post-hook-external" ] && [ ! -e "$tmp/post-hook-rollback-root/usr/lib/ps5-cachyos-tools" ]; then ok 'rollback post-hook compensa gli hook precedenti in ordine inverso'; else no 'rollback post-hook lascia effetti esterni'; fi
+mkdir -p "$tmp/post-hook-commit-root/etc"; printf 'ID=linux\nNAME=linux\n' > "$tmp/post-hook-commit-root/etc/os-release"
+if ( source "$ROOT/lib/core/log.sh"; source "$ROOT/lib/core/target.sh"; source "$ROOT/lib/core/registry.sh"; source "$ROOT/lib/core/dependencies.sh"; source "$ROOT/lib/core/service.sh"; source "$ROOT/lib/core/installer.sh"; HOOK_B_FAIL=commit CORE_INSTALL_MODE=offline core_install "$tmp/post-hook-commit-root" "$fixture_repo" post-hook-b ) >/dev/null 2>&1; then no 'commit post-hook successivo fallito accettato'; elif [ ! -e "$tmp/post-hook-commit-root/var/lib/post-hook-external" ] && [ ! -e "$tmp/post-hook-commit-root/usr/lib/ps5-cachyos-tools" ]; then ok 'rollback post-hook conserva la compensazione fino al commit di tutti gli hook'; else no 'commit fallito non ha compensato gli hook precedenti'; fi
 dep_repo="$tmp/dep-repo"; cp -a "$ROOT/." "$dep_repo"; mkdir -p "$dep_repo/modules/dep-a" "$dep_repo/modules/dep-b"
 cat > "$dep_repo/modules/dep-a/module.conf" <<'EOF'
 ID=dep-a

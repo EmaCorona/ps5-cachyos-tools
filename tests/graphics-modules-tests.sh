@@ -3,6 +3,8 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d /tmp/ps5-graphics-modules.XXXXXX)
 trap 'rm -rf -- "$tmp"' EXIT
+mkdir -p "$tmp/fake-gamescope-scripts"
+export PS5_GAMESCOPE_SCRIPT_PATH="$tmp/fake-gamescope-scripts"
 pass=0 fail=0
 ok() { printf 'PASS: %s\n' "$1"; pass=$((pass + 1)); }
 no() { printf 'FAIL: %s\n' "$1" >&2; fail=$((fail + 1)); }
@@ -12,6 +14,36 @@ COMMON="$ROOT/modules/session/files/session-common.sh"
 SELECT="$ROOT/modules/session/files/steamos-session-select"
 SUPERVISOR="$ROOT/modules/session/files/session-supervisor"
 export CORE_TEST_MODE=1
+mock_package="$tmp/mock-gamescope-package"
+mock_pacman="$tmp/mock-pacman"
+cat > "$mock_package" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+root=$2
+case "$1" in
+  preflight) exit 0 ;;
+  install)
+    mkdir -p "$root/usr/lib/ps5-cachyos-tools/gamescope/bin" "$root/usr/lib/ps5-cachyos-tools/gamescope/share/gamescope/scripts" "$root/usr/share/ps5-cachyos-tools/gamescope" "$root/var/lib/ps5-cachyos-tools/gamescope/packages"
+    printf '#!/bin/sh\nexit 0\n' > "$root/usr/lib/ps5-cachyos-tools/gamescope/bin/gamescope"
+    chmod 0755 "$root/usr/lib/ps5-cachyos-tools/gamescope/bin/gamescope"
+    printf 'upstream_commit=e6674a98118ca7b098b98a3874b8f195ae1bf750\n' > "$root/usr/share/ps5-cachyos-tools/gamescope/build-info"
+    ;;
+  rollback) rm -rf "$root/usr/lib/ps5-cachyos-tools/gamescope" "$root/usr/share/ps5-cachyos-tools/gamescope" ;;
+  commit|finalize) : ;;
+  remove) rm -rf "$root/usr/lib/ps5-cachyos-tools/gamescope" "$root/usr/share/ps5-cachyos-tools/gamescope" ;;
+  *) exit 2 ;;
+esac
+EOF
+cat > "$mock_pacman" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *' -Q ps5-cachyos-gamescope') exit 0 ;;
+  *' -Ql ps5-cachyos-gamescope') printf 'ps5-cachyos-gamescope /usr/lib/ps5-cachyos-tools/gamescope/bin/gamescope\n' ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod 0755 "$mock_package" "$mock_pacman"
+export PS5_GAMESCOPE_PACKAGE_HELPER="$mock_package" PS5_GAMESCOPE_PACMAN="$mock_pacman"
 
 fixture() {
     local root=$1 python3
@@ -41,7 +73,7 @@ if [ -x "$root/usr/local/libexec/ps5-cachyos-tools/gamescope-session" ] && \
    [ -x "$root/usr/local/bin/ps5-cachyos-tools-steam-verify-repair" ]; then ok 'wrapper DRM e utility Gamescope installate'; else no 'utility Gamescope incomplete'; fi
 
 # A module revision change must refresh the helper assets of installed dependencies.
-sed -i 's/^REVISION=2$/REVISION=1/' "$root/usr/lib/ps5-cachyos-tools/modules/gamescope/module.conf"
+sed -i 's/^REVISION=3$/REVISION=1/' "$root/usr/lib/ps5-cachyos-tools/modules/gamescope/module.conf"
 sed -i 's/^REVISION=4$/REVISION=3/' "$root/usr/lib/ps5-cachyos-tools/modules/session/module.conf"
 printf 'stale helper\n' > "$root/usr/local/bin/ps5-cachyos-tools-steam-verify-repair"
 printf 'stale session runtime\n' > "$root/usr/local/libexec/ps5-cachyos-tools/session-common.sh"
