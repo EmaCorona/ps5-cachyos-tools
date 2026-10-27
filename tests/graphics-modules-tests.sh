@@ -44,6 +44,7 @@ esac
 EOF
 chmod 0755 "$mock_package" "$mock_pacman"
 export PS5_GAMESCOPE_PACKAGE_HELPER="$mock_package" PS5_GAMESCOPE_PACMAN="$mock_pacman"
+export XDG_SESSION_ID=1
 
 fixture() {
     local root=$1 python3
@@ -74,7 +75,7 @@ if [ -x "$root/usr/local/libexec/ps5-cachyos-tools/gamescope-session" ] && \
 
 # A module revision change must refresh the helper assets of installed dependencies.
 sed -i 's/^REVISION=3$/REVISION=1/' "$root/usr/lib/ps5-cachyos-tools/modules/gamescope/module.conf"
-sed -i 's/^REVISION=4$/REVISION=3/' "$root/usr/lib/ps5-cachyos-tools/modules/session/module.conf"
+sed -i 's/^REVISION=5$/REVISION=4/' "$root/usr/lib/ps5-cachyos-tools/modules/session/module.conf"
 printf 'stale helper\n' > "$root/usr/local/bin/ps5-cachyos-tools-steam-verify-repair"
 printf 'stale session runtime\n' > "$root/usr/local/libexec/ps5-cachyos-tools/session-common.sh"
 if "$CLI" install --root "$root" --module session > "$tmp/revision-upgrade.log" 2>&1 && \
@@ -165,6 +166,30 @@ for command in pgrep pkill loginctl; do
     cat > "$fakebin/$command" <<'EOF'
 #!/usr/bin/env bash
 printf '%s %s\n' "${0##*/}" "$*" >> "${PS5_COMMAND_TRACE:-/dev/null}"
+if [[ ${0##*/} == loginctl && ${1:-} == seat-status ]]; then
+    printf 'seat0\n  /sys/devices/test/drm/card0\n  drm:card0\n'
+    exit 0
+fi
+if [[ ${0##*/} == loginctl && ${1:-} == show-session ]]; then
+    session_id=$2; property=${4#-p}; property=${4#Property=}
+    property=${4:-}; [[ $property == -p ]] && property=${5:-}
+    property=${property#User=}; property=${property#Class=}; property=${property#Seat=}; property=${property#Active=}
+    case "$session_id:$property" in
+        1:User) value=1000;; 1:Class) value=user;; 1:Seat) value=seat0;; 1:Active) value=yes;;
+        2:User) value=1000;; 2:Class) value=manager;; 2:Seat) value='';; 2:Active) value=yes;;
+        *) exit 1;;
+    esac
+    printf '%s\n' "$value"
+    exit 0
+fi
+if [[ ${0##*/} == loginctl && ${1:-} == show-user && ${4:-} == Sessions ]]; then
+    printf '1 2\n'
+    exit 0
+fi
+if [[ ${0##*/} == loginctl && ${1:-} == list-sessions ]]; then
+    printf '1 1000 steam seat0 tty1 no -\n2 1000 steam - - no -\n'
+    exit 0
+fi
 exit 1
 EOF
 done
@@ -234,6 +259,191 @@ cmp -s "$live/session.conf.expected" "$live/home/.config/ps5-cachyos-tools/sessi
 kill -TERM "$live_pid" 2>/dev/null || true
 wait "$live_pid" 2>/dev/null || true
 if (( live_ok )); then ok 'supervisore consente KDE→Gamescope→KDE senza cambiare policy o session.conf'; else cat "$live/home/supervisor.out" "$live/home/session.log" "$live/trace" >&2 2>/dev/null; no 'transizione live KDE/Gamescope'; fi
+
+# If another DRM master remains, the live switch is rejected and KDE is restored.
+busy_seat="$tmp/busy-seat"
+mkdir -p "$busy_seat/home" "$busy_seat/run" "$busy_seat/bin"
+cp "$SUPERVISOR" "$busy_seat/home/session-supervisor"
+cat > "$busy_seat/home/session-policy" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' gamescope
+EOF
+cat > "$busy_seat/bin/loginctl" <<'EOF'
+#!/usr/bin/env bash
+if [[ ${1:-} == seat-status ]]; then
+    printf 'seat0\n  [MASTER] drm:card0\n'
+    exit 0
+fi
+exit 1
+EOF
+chmod 0755 "$busy_seat/home/session-policy" "$busy_seat/bin/loginctl"
+busy_ok=1
+if PS5_SESSION_RUNTIME="$busy_seat/run" PS5_SESSION_COMMON="$COMMON" PS5_SESSION_LOG="$busy_seat/home/session.log" \
+   PS5_FALLBACK_LOG="$busy_seat/home/fallback.log" PS5_ALERT_FILE="$busy_seat/home/alert.txt" \
+   PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$busy_seat/trace" HOME="$busy_seat/home" \
+   PS5_FORCE_TTY1=1 PS5_SESSION_SKIP_DRM_WAIT=1 PS5_SESSION_SEAT_RELEASE_TIMEOUT_SEC=1 \
+   PATH="$busy_seat/bin:$fakebin:$PATH" "$busy_seat/home/session-supervisor" >/dev/null 2>&1; then
+    grep -qx plasma "$busy_seat/trace" 2>/dev/null || busy_ok=0
+    grep -qx gamescope "$busy_seat/trace" 2>/dev/null && busy_ok=0
+    grep -q 'seat DRM ancora occupato' "$busy_seat/home/fallback.log" 2>/dev/null || busy_ok=0
+else busy_ok=0; fi
+if (( busy_ok )); then ok 'owner DRM residuo rifiuta Gamescope e avvia KDE senza kill globale'; else cat "$busy_seat/home/session.log" "$busy_seat/home/fallback.log" "$busy_seat/trace" >&2 2>/dev/null; no 'seat occupato non protegge il fallback'; fi
+
+incomplete_seat="$tmp/incomplete-seat"
+mkdir -p "$incomplete_seat/home" "$incomplete_seat/run" "$incomplete_seat/bin"
+cp "$SUPERVISOR" "$incomplete_seat/home/session-supervisor"
+cp "$busy_seat/home/session-policy" "$incomplete_seat/home/session-policy"
+cat > "$incomplete_seat/bin/loginctl" <<'EOF'
+#!/usr/bin/env bash
+if [[ ${1:-} == seat-status ]]; then
+    if [[ ${FAKE_SEAT_STATUS_MODE:-empty} == prefix ]]; then printf 'seat0\n  drm:card10\n'; else printf 'seat0\n'; fi
+    exit 0
+fi
+if [[ ${1:-} == show-session ]]; then
+    case "${2:-}:${4:-}" in
+        1:User) echo 1000;; 1:Class) echo user;; 1:Seat) echo seat0;; 1:Active) echo yes;;
+        2:User) echo 1000;; 2:Class) echo manager;; 2:Seat) echo '';; 2:Active) echo yes;;
+        *) exit 1;;
+    esac
+    exit 0
+fi
+if [[ ${1:-} == show-user && ${4:-} == Sessions ]]; then printf '1 2\n'; exit 0; fi
+if [[ ${1:-} == list-sessions ]]; then printf '1 1000 steam seat0 tty1 no -\n2 1000 steam - - no -\n'; exit 0; fi
+exit 1
+EOF
+chmod 0755 "$incomplete_seat/home/session-policy" "$incomplete_seat/bin/loginctl"
+incomplete_ok=1
+if PS5_SESSION_RUNTIME="$incomplete_seat/run" PS5_SESSION_COMMON="$COMMON" PS5_SESSION_LOG="$incomplete_seat/home/session.log" \
+   PS5_FALLBACK_LOG="$incomplete_seat/home/fallback.log" PS5_ALERT_FILE="$incomplete_seat/home/alert.txt" \
+   PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$incomplete_seat/trace" HOME="$incomplete_seat/home" \
+   PS5_FORCE_TTY1=1 PS5_SESSION_SKIP_DRM_WAIT=1 PATH="$incomplete_seat/bin:$fakebin:$PATH" \
+   "$incomplete_seat/home/session-supervisor" >/dev/null 2>&1; then
+    grep -qx plasma "$incomplete_seat/trace" 2>/dev/null || incomplete_ok=0
+    grep -qx gamescope "$incomplete_seat/trace" 2>/dev/null && incomplete_ok=0
+    grep -q 'device drm:card0 non identificato' "$incomplete_seat/home/session.log" 2>/dev/null || incomplete_ok=0
+else incomplete_ok=0; fi
+if (( incomplete_ok )); then ok 'stato seat incompleto è fail-closed e avvia KDE'; else cat "$incomplete_seat/home/session.log" "$incomplete_seat/home/fallback.log" "$incomplete_seat/trace" >&2 2>/dev/null; no 'stato seat incompleto viene trattato come libero'; fi
+
+: > "$incomplete_seat/trace"
+: > "$incomplete_seat/home/session.log"
+: > "$incomplete_seat/home/fallback.log"
+prefix_ok=1
+if FAKE_SEAT_STATUS_MODE=prefix PS5_DRM_DEVICE=/dev/dri/card1 \
+   PS5_SESSION_RUNTIME="$incomplete_seat/run" PS5_SESSION_COMMON="$COMMON" PS5_SESSION_LOG="$incomplete_seat/home/session.log" \
+   PS5_FALLBACK_LOG="$incomplete_seat/home/fallback.log" PS5_ALERT_FILE="$incomplete_seat/home/alert.txt" \
+   PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$incomplete_seat/trace" HOME="$incomplete_seat/home" \
+   PS5_FORCE_TTY1=1 PS5_SESSION_SKIP_DRM_WAIT=1 PATH="$incomplete_seat/bin:$fakebin:$PATH" \
+   "$incomplete_seat/home/session-supervisor" >/dev/null 2>&1; then
+    grep -qx plasma "$incomplete_seat/trace" 2>/dev/null || prefix_ok=0
+    grep -qx gamescope "$incomplete_seat/trace" 2>/dev/null && prefix_ok=0
+    grep -q 'device drm:card1 non identificato' "$incomplete_seat/home/session.log" 2>/dev/null || prefix_ok=0
+else prefix_ok=0; fi
+if (( prefix_ok )); then ok 'device DRM card1 non viene confuso con card10'; else cat "$incomplete_seat/home/session.log" "$incomplete_seat/home/fallback.log" "$incomplete_seat/trace" >&2 2>/dev/null; no 'corrispondenza DRM confonde card1 e card10'; fi
+
+multi_session="$tmp/multi-session"
+mkdir -p "$multi_session/home" "$multi_session/run" "$multi_session/bin" "$multi_session/home/.config/ps5-cachyos-tools"
+cp "$SUPERVISOR" "$multi_session/home/session-supervisor"
+cat > "$multi_session/home/session-policy" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' desktop
+EOF
+cat > "$multi_session/bin/loginctl" <<'EOF'
+#!/usr/bin/env bash
+if [[ ${1:-} == seat-status ]]; then printf 'seat0\n  drm:card0\n'; exit 0; fi
+if [[ ${1:-} == show-session ]]; then
+    case "${2:-}:${4:-}" in
+        1:User|3:User|2:User) echo 1000;;
+        1:Class|3:Class) echo user;; 2:Class) echo manager;;
+        1:Seat) echo seat0;; 1:Active) echo yes;; 3:Seat) echo seat1;; 3:Active) echo yes;;
+        2:Seat) echo '';; 2:Active) echo yes;; *) exit 1;;
+    esac
+    exit 0
+fi
+if [[ ${1:-} == show-user && ${4:-} == Sessions ]]; then
+    if [[ -e ${FAKE_MULTI_SESSION_FILE:-/nonexistent} ]]; then printf '1 3 2\n'; else printf '1 2\n'; fi
+    exit 0
+fi
+if [[ ${1:-} == list-sessions ]]; then
+    [[ ! -e ${FAKE_SESSION_LIST_EMPTY_FILE:-/nonexistent} ]] || exit 0
+    printf '1 1000 steam seat0 tty1 no -\n'
+    if [[ -e ${FAKE_MULTI_SESSION_FILE:-/nonexistent} && ! -e ${FAKE_SESSION_LIST_PARTIAL_FILE:-/nonexistent} ]]; then
+        printf '3 1000 steam seat1 tty2 no -\n'
+    fi
+    printf '2 1000 steam - - no -\n'
+    exit 0
+fi
+exit 1
+EOF
+chmod 0755 "$multi_session/home/session-policy" "$multi_session/bin/loginctl"
+touch "$multi_session/multi.active"
+PS5_SESSION_RUNTIME="$multi_session/run" PS5_SESSION_COMMON="$COMMON" PS5_SESSION_LOG="$multi_session/home/session.log" \
+  PS5_COMMAND_TRACE="$multi_session/commands" PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" \
+  PS5_TRACE="$multi_session/trace" HOME="$multi_session/home" FAKE_MULTI_SESSION_FILE="$multi_session/multi.active" PS5_FORCE_TTY1=1 FAKE_PLASMA_WAIT=1 \
+  PATH="$multi_session/bin:$fakebin:$PATH" "$multi_session/home/session-supervisor" >"$multi_session/home/supervisor.out" 2>&1 &
+multi_pid=$!
+multi_ok=1
+for _ in {1..100}; do [[ -f "$multi_session/trace" ]] && grep -qx plasma "$multi_session/trace" && break; sleep 0.05; done
+[[ -f "$multi_session/trace" ]] && grep -qx plasma "$multi_session/trace" || multi_ok=0
+if PS5_SESSION_RUNTIME="$multi_session/run" PS5_SESSION_COMMON="$COMMON" "$SELECT" --once gamescope >/dev/null 2>&1; then :; else multi_ok=0; fi
+for _ in {1..100}; do grep -q 'sessione KDE lasciata attiva' "$multi_session/home/session.log" 2>/dev/null && break; sleep 0.05; done
+grep -q 'sessione KDE lasciata attiva' "$multi_session/home/session.log" 2>/dev/null || multi_ok=0
+grep -qx plasma "$multi_session/trace" 2>/dev/null || multi_ok=0
+grep -qx gamescope "$multi_session/trace" 2>/dev/null && multi_ok=0
+grep -q 'systemctl --user stop plasma-workspace-wayland.target' "$multi_session/commands" 2>/dev/null && multi_ok=0
+rm -f "$multi_session/multi.active"
+kill -TERM "$multi_pid" 2>/dev/null || true
+wait "$multi_pid" 2>/dev/null || true
+if (( multi_ok )); then ok 'sessione utente concorrente rifiuta lo switch senza fermare KDE'; else cat "$multi_session/home/supervisor.out" "$multi_session/home/session.log" "$multi_session/commands" "$multi_session/trace" >&2 2>/dev/null; no 'sessione concorrente non protegge KDE'; fi
+
+: > "$multi_session/trace"
+: > "$multi_session/home/session.log"
+: > "$multi_session/commands"
+touch "$multi_session/multi.active" "$multi_session/session-list.partial"
+partial_sessions_ok=1
+PS5_SESSION_RUNTIME="$multi_session/run" PS5_SESSION_COMMON="$COMMON" PS5_SESSION_LOG="$multi_session/home/session.log" \
+  PS5_COMMAND_TRACE="$multi_session/commands" PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" \
+  PS5_TRACE="$multi_session/trace" HOME="$multi_session/home" FAKE_MULTI_SESSION_FILE="$multi_session/multi.active" \
+  FAKE_SESSION_LIST_PARTIAL_FILE="$multi_session/session-list.partial" PS5_FORCE_TTY1=1 FAKE_PLASMA_WAIT=1 \
+  PATH="$multi_session/bin:$fakebin:$PATH" "$multi_session/home/session-supervisor" >"$multi_session/home/partial-supervisor.out" 2>&1 &
+partial_pid=$!
+for _ in {1..100}; do [[ -f "$multi_session/trace" ]] && grep -qx plasma "$multi_session/trace" && break; sleep 0.05; done
+[[ -f "$multi_session/trace" ]] && grep -qx plasma "$multi_session/trace" || partial_sessions_ok=0
+if PS5_SESSION_RUNTIME="$multi_session/run" PS5_SESSION_COMMON="$COMMON" "$SELECT" --once gamescope >/dev/null 2>&1; then :; else partial_sessions_ok=0; fi
+for _ in {1..100}; do grep -q 'elenco sessioni logind incompleto rispetto' "$multi_session/home/session.log" 2>/dev/null && break; sleep 0.05; done
+grep -q 'elenco sessioni logind incompleto rispetto' "$multi_session/home/session.log" 2>/dev/null || partial_sessions_ok=0
+grep -qx gamescope "$multi_session/trace" 2>/dev/null && partial_sessions_ok=0
+grep -q 'systemctl --user stop plasma-workspace-wayland.target' "$multi_session/commands" 2>/dev/null && partial_sessions_ok=0
+rm -f "$multi_session/multi.active" "$multi_session/session-list.partial"
+kill -TERM "$partial_pid" 2>/dev/null || true
+wait "$partial_pid" 2>/dev/null || true
+if (( partial_sessions_ok )); then ok 'elenco sessioni parziale viene rilevato dal controllo logind incrociato'; else cat "$multi_session/home/partial-supervisor.out" "$multi_session/home/session.log" "$multi_session/commands" "$multi_session/trace" >&2 2>/dev/null; no 'elenco sessioni parziale non blocca cleanup'; fi
+
+: > "$multi_session/trace"
+: > "$multi_session/home/session.log"
+: > "$multi_session/commands"
+touch "$multi_session/sessions.empty"
+empty_sessions_ok=1
+PS5_SESSION_RUNTIME="$multi_session/run" PS5_SESSION_COMMON="$COMMON" PS5_SESSION_LOG="$multi_session/home/session.log" \
+  PS5_COMMAND_TRACE="$multi_session/commands" PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" \
+  PS5_TRACE="$multi_session/trace" HOME="$multi_session/home" FAKE_MULTI_SESSION_FILE="$multi_session/multi.active" \
+  FAKE_SESSION_LIST_EMPTY_FILE="$multi_session/sessions.empty" PS5_FORCE_TTY1=1 FAKE_PLASMA_WAIT=1 \
+  PATH="$multi_session/bin:$fakebin:$PATH" "$multi_session/home/session-supervisor" >"$multi_session/home/empty-supervisor.out" 2>&1 &
+empty_sessions_pid=$!
+for _ in {1..100}; do [[ -f "$multi_session/trace" ]] && grep -qx plasma "$multi_session/trace" && break; sleep 0.05; done
+[[ -f "$multi_session/trace" ]] && grep -qx plasma "$multi_session/trace" || empty_sessions_ok=0
+if PS5_SESSION_RUNTIME="$multi_session/run" PS5_SESSION_COMMON="$COMMON" "$SELECT" --once gamescope >/dev/null 2>&1; then :; else empty_sessions_ok=0; fi
+for _ in {1..100}; do grep -q 'elenco sessioni logind vuoto o incompleto' "$multi_session/home/session.log" 2>/dev/null && break; sleep 0.05; done
+grep -q 'elenco sessioni logind vuoto o incompleto' "$multi_session/home/session.log" 2>/dev/null || empty_sessions_ok=0
+grep -qx gamescope "$multi_session/trace" 2>/dev/null && empty_sessions_ok=0
+grep -q 'systemctl --user stop plasma-workspace-wayland.target' "$multi_session/commands" 2>/dev/null && empty_sessions_ok=0
+rm -f "$multi_session/sessions.empty"
+kill -TERM "$empty_sessions_pid" 2>/dev/null || true
+wait "$empty_sessions_pid" 2>/dev/null || true
+if (( empty_sessions_ok )); then ok 'elenco logind vuoto rifiuta cleanup e mantiene KDE attivo'; else cat "$multi_session/home/empty-supervisor.out" "$multi_session/home/session.log" "$multi_session/commands" "$multi_session/trace" >&2 2>/dev/null; no 'elenco logind vuoto non blocca cleanup'; fi
+
+if ! rg -q 'pkill|kill -TERM.*(plasmashell|kwin_wayland|Xwayland)' "$SUPERVISOR"; then
+    ok 'cleanup KDE non invia segnali per UID/nome a processi grafici esterni al process group'
+else no 'cleanup KDE conserva un kill grafico UID-wide'; fi
 
 # A live request can leave the DRM readiness gate before Gamescope starts.
 drm_switch="$tmp/drm-live-switch"
