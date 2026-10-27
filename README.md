@@ -18,8 +18,10 @@ The project includes independent modules for system management, graphics session
 
 - **`fan`** — PS5 thermal controller with 15 temperature zones and `low`, `balanced`, and `high` profiles. It runs as a systemd service and reports readiness and degraded states.
 - **`boot-cleanup`** — conservative early-boot task that only removes verified stale Steam artifacts from an explicit allowlist. A separate manual helper normalizes `/tmp/dumps` permissions without deleting its contents.
-- **`kde`, `gamescope`, and `session`** — prepare KDE and Gamescope and let the repository select the default session at TTY1, switch between KDE and Gamescope, and fall back to KDE if Gamescope fails.
+- **`kde`, `gamescope`, and `session`** — prepare KDE Plasma Wayland and Gamescope DRM; the `session` supervisor launches KDE by default from a versioned TTY1 boot policy, handles live KDE/Gamescope switches, and falls back to KDE if Gamescope fails.
 - **`vram`** — writes the selected allocation to `vram.txt` on the loader's FAT32 partition. Its first-install default is **4 GiB**; the value can be selected during installation.
+
+Gamescope selects the connected DRM/KMS mode with the highest resolution (then refresh rate), with optional overrides in `/etc/ps5-cachyos-tools/gamescope.conf`; if `modetest` is unavailable, its mode detector uses 60 Hz as a fallback. KDE selects from KScreen/EDID modes at desktop startup. Detection alone does not guarantee a working HDMI signal or a correctly scaled Steam UI.
 
 The project operates on an **existing Linux installation**. It does not install CachyOS, partition or format disks, prepare an exploit or bootloader, or include the network, Bluetooth, display, and M.2 migration patches from the related [PS5 CachyOS Patch](https://github.com/EmaCorona/ps5-cachy-os-patch) repository. Hardware compatibility depends on the PS5 Linux kernel, drivers, firmware, and exposed device interfaces. Automated tests are hardware-free and do not replace tests on the console.
 
@@ -43,7 +45,7 @@ sudo ./bin/ps5-cachyos-tools install --root /mnt/ps5-root --boot /mnt/ps5-boot -
 sudo ./bin/ps5-cachyos-tools install --root /mnt/ps5-root --boot /mnt/ps5-boot
 ```
 
-Without `--module`, the installer selects all modules available in the checkout. The dry run validates the target and displays the plan without applying modules. Offline installation copies files and prepares systemd enablement links in the target; it does not run systemd or execute boot tasks on the host. The `fan` service and boot tasks run when the target system starts. The graphics session modules apply their configuration at normal boot; the session supervisor selects KDE by default and supports switching to Gamescope.
+Without `--module`, the installer selects all modules available in the checkout. The dry run validates the target and displays the plan without applying modules. Offline installation copies files and prepares systemd enablement links in the target; it does not run systemd or execute boot tasks on the host. The `fan` service and boot tasks run when the target system starts. Graphics integration files are installed into the target immediately; their normal-phase boot tasks check those artifacts. When a login shell starts on TTY1, the session supervisor selects KDE from the versioned boot policy and supports temporary switching to Gamescope.
 
 ### Install directly on a running PS5 Linux system (live)
 
@@ -58,11 +60,11 @@ sudo ./bin/ps5-cachyos-tools install --live --boot /boot/efi --dry-run
 sudo ./bin/ps5-cachyos-tools install --live --boot /boot/efi
 ```
 
-The live installer requires administrative privileges and PS5 platform detection. It enables and starts the fan service after successful installation. `boot-cleanup` runs through `ps5-tools-early.service` at a subsequent boot, or can be invoked with `reapply`. KDE, Gamescope, and session tasks validate their artifacts at normal boot; TTY1 starts KDE by default, and the session controller supports switching back to Gamescope. The VRAM module writes the selected byte count in hexadecimal to `vram.txt`; its initial default is 4 GiB. The loader reads that file during a later Linux boot.
+The live installer requires administrative privileges and PS5 platform detection. It enables and starts the fan service after successful installation. `boot-cleanup` runs through `ps5-tools-early.service` at a subsequent boot, or can be invoked with `reapply`. KDE, Gamescope, and session tasks validate their artifacts at normal boot; a login shell on TTY1 starts the session supervisor, which launches KDE by default, accepts temporary switches to Gamescope, and falls back to KDE if Gamescope fails. The framework does not install KDE/Gamescope packages or update Steam. The VRAM module writes the selected byte count in hexadecimal to `vram.txt`; its initial default is 4 GiB. The loader reads that file during a later Linux boot.
 
 ### Install selected modules or set VRAM explicitly
 
-Pass `--module` to install only the requested module. The VRAM module requires `--boot`, whether installing live or offline.
+Pass `--module` to install a specific module and any declared dependencies (`session` also selects `kde` and `gamescope`). The VRAM module requires `--boot`, whether installing live or offline; a full installation includes VRAM and therefore also requires `--boot`. The Gamescope module requires `/usr/bin/python3` in the target system.
 
 ```bash
 # Fan controller only
@@ -77,6 +79,17 @@ sudo ./bin/ps5-cachyos-tools install --live --module vram --boot /boot/efi --vra
 ```
 
 Supported VRAM values are `512MiB` and `1GiB` through `8GiB`. If `--vram-size` is omitted, the module preserves a valid existing configuration or `vram.txt`; if neither exists on first installation, it uses 4 GiB. `512MiB` is the loader's dynamic-allocation setting. The `vram.txt` file is retained when the module is removed, so the loader continues to use the last configured value.
+
+### Switch between KDE and Gamescope
+
+Once the session supervisor is running on TTY1, use the session selector to switch the active session:
+
+```bash
+steamos-session-select gamescope
+steamos-session-select desktop
+```
+
+These switches are temporary and require a running supervisor. The compatibility options `--default` and `--once` also request only a live switch: **neither changes the next boot**. The initial session is selected exclusively by `modules/session/files/session-policy` (installed at `/usr/local/libexec/ps5-cachyos-tools/session-policy`), which currently selects KDE. To make Gamescope the boot default, change that versioned policy to output `gamescope` and reinstall the `session` module. The project does not configure TTY1 autologin itself; see the [session module documentation](docs/modules/session.md).
 
 ### Inspect the installation
 
@@ -143,7 +156,7 @@ Contributions are welcome. A typical contribution flow is:
 2. **Clone** your fork: `git clone https://github.com/<your-user>/ps5-cachyos-tools.git`.
 3. **Create a branch**: `git checkout -b feature/your-feature` (or use `fix/` or `docs/` for those changes).
 4. **Implement the change** and update the relevant documentation. New modules should follow the manifest-driven module API.
-5. **Run the hardware-free tests**: `bash tests/run-tests.sh`.
+5. **Run the hardware-free tests**: `bash tests/run-tests.sh && bash tests/core/run-tests.sh`.
 6. **Commit and push** your branch, then open a pull request.
 
 Please do not treat simulated tests as hardware validation. Changes involving PS5-specific interfaces should also be checked on the target hardware when available.
