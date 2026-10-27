@@ -1,5 +1,9 @@
 # Registro fix
 
+- 2026-10-27 — [`84ffe90`](fix-gamescope-edid-dtd.md): Gamescope può provare il DTD preferito dell’EDID con atomic test-only e mantenere il fallback KMS.
+
+- 2026-10-27 — [`7b93e2d86e2b`](fix-7b93e2d86e2b-generic-gamescope-modes.md): rimosse le preferenze Gamescope automatiche fisse per seguire modalità DRM native e hotplug.
+
 - 2026-10-26 — [`08f967d83253`](fix-08f967d83253-session-live-switch.md): ripristinato il cambio live KDE↔Gamescope senza modificare la policy di boot.
 
 - 2026-10-26 — [`66f508025ad4`](fix-66f508025ad4-session-policy-authority.md): selezione boot esclusivamente dalla policy versionata, indipendente dalle preferenze persistenti e dal selettore legacy.
