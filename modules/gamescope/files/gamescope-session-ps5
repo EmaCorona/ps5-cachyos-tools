@@ -57,10 +57,24 @@ if [[ -e "$config" ]]; then
         esac
     done < "$config"
 fi
-for value in "${output_w:-1920}" "${output_h:-1080}" "${nested_w:-1920}" "${nested_h:-1080}" "${refresh:-60}"; do
-    [[ "$value" =~ ^[0-9]{1,5}$ ]] || { log "valore numerico non valido in $config"; exit 78; }
+if [[ -n "$output_w" || -n "$output_h" ]] && { [[ -z "$output_w" ]] || [[ -z "$output_h" ]]; }; then
+    log 'PS5_OUTPUT_WIDTH e PS5_OUTPUT_HEIGHT devono essere configurati insieme'; exit 78
+fi
+if [[ -n "$nested_w" || -n "$nested_h" ]] && { [[ -z "$nested_w" ]] || [[ -z "$nested_h" ]]; }; then
+    log 'PS5_NESTED_WIDTH e PS5_NESTED_HEIGHT devono essere configurati insieme'; exit 78
+fi
+for value in "$output_w" "$output_h" "$nested_w" "$nested_h" "$refresh"; do
+    [[ -z "$value" || "$value" =~ ^[0-9]{1,5}$ ]] || { log "valore numerico non valido in $config"; exit 78; }
 done
-(( ${output_w:-1920} >= 320 && ${output_w:-1920} <= 7680 && ${output_h:-1080} >= 200 && ${output_h:-1080} <= 4320 && ${nested_w:-1920} >= 320 && ${nested_w:-1920} <= 7680 && ${nested_h:-1080} >= 200 && ${nested_h:-1080} <= 4320 && ${refresh:-60} >= 24 && ${refresh:-60} <= 240 )) || { log 'modalità configurata fuori dai limiti'; exit 78; }
+if [[ -n "$output_w" ]]; then
+    (( output_w >= 320 && output_w <= 7680 && output_h >= 200 && output_h <= 4320 )) || { log 'risoluzione output configurata fuori dai limiti'; exit 78; }
+fi
+if [[ -n "$nested_w" ]]; then
+    (( nested_w >= 320 && nested_w <= 7680 && nested_h >= 200 && nested_h <= 4320 )) || { log 'risoluzione annidata configurata fuori dai limiti'; exit 78; }
+fi
+if [[ -n "$refresh" ]]; then
+    (( refresh >= 24 && refresh <= 240 )) || { log 'frequenza configurata fuori dai limiti'; exit 78; }
+fi
 [[ -z "$output_conn" || "$output_conn" =~ ^[A-Za-z0-9_-]+$ ]] || { log 'connettore non valido'; exit 78; }
 detected_conn='' detected_w='' detected_h='' detected_refresh=''
 detector=${PS5_GAMESCOPE_MODE_DETECTOR:-/usr/local/bin/ps5-cachyos-tools-gamescope-display-mode}
@@ -68,7 +82,7 @@ if [[ -x "$detector" ]]; then
     detected_mode=$(PS5_GAMESCOPE_DRM_SYSFS_ROOT="$drm_root" PS5_GAMESCOPE_PREFERRED_CONNECTOR="$output_conn" "$detector" 2>>"$log_file") || detected_mode=''
     IFS=$'\t' read -r detected_w detected_h detected_refresh detected_conn <<< "$detected_mode"
 fi
-if [[ -n "$output_conn" && -z "$detected_w" ]]; then
+if [[ -n "$output_conn" && ! "$detected_w" =~ ^[0-9]{3,5}$ ]]; then
     log "il connettore configurato non è connesso o non espone modalità valide: $output_conn"
     exit 71
 fi
@@ -76,26 +90,11 @@ if [[ -n "$output_conn" && -n "$detected_conn" && "$output_conn" != "$detected_c
     log "il connettore rilevato ($detected_conn) non coincide con quello configurato ($output_conn)"
     exit 71
 fi
-if [[ ! "$detected_w" =~ ^[0-9]{3,5}$ || ! "$detected_h" =~ ^[0-9]{3,5}$ || ! "$detected_refresh" =~ ^[0-9]{2,3}$ ]]; then
-    detected_conn='' detected_w='' detected_h='' detected_refresh=''
-    for connector in "$drm_root"/card*-*; do
-        [[ -r "$connector/status" && $(<"$connector/status") == connected && -r "$connector/modes" ]] || continue
-        mode=''; IFS= read -r mode < "$connector/modes" || true
-        [[ "$mode" =~ ^([0-9]{3,5})x([0-9]{3,5})$ ]] || continue
-        detected_conn=${connector##*/}; detected_conn=${detected_conn#card*-}
-        detected_w=${BASH_REMATCH[1]} detected_h=${BASH_REMATCH[2]} detected_refresh=60
-        case "$detected_conn" in DP-1|HDMI-A-1) break;; esac
-    done
+if [[ "$detected_w" =~ ^[0-9]{3,5}$ && "$detected_h" =~ ^[0-9]{3,5}$ && "$detected_refresh" =~ ^[0-9]{2,3}$ ]]; then
+    log "milestone=display_mode_candidate connector=$detected_conn ${detected_w}x${detected_h} aspect=${detected_w}:${detected_h} refresh=${detected_refresh} source=DRM-KMS"
+else
+    log 'milestone=display_mode_detection_unavailable; Gamescope userà la modalità preferita e hotplug gestiti dal backend DRM'
 fi
-if [[ -z "$detected_w" ]]; then
-    [[ ${PS5_SKIP_DRM_CHECK:-0} == 1 ]] || { log 'nessun connettore DRM connected con una mode valida'; exit 71; }
-    detected_w=1920 detected_h=1080 detected_refresh=60
-fi
-output_w=${output_w:-$detected_w}; output_h=${output_h:-$detected_h}
-nested_w=${nested_w:-$output_w}; nested_h=${nested_h:-$output_h}
-refresh=${refresh:-$detected_refresh}
-output_conn=${output_conn:-${detected_conn:-DP-1,HDMI-A-1}}
-log "milestone=display_mode_selected output=$output_conn ${output_w}x${output_h} nested=${nested_w}x${nested_h} refresh=$refresh"
 if [[ -x "$verify_helper" ]]; then
     helper_start=$(monotonic_ms)
     log 'milestone=steam_manifest_check_start'
@@ -113,7 +112,12 @@ export GAMESCOPE_DISPLAY_SUPPORTS_HDR=0 GAMESCOPE_DISPLAY_HDR_ENABLED=0 GAMESCOP
 export RADV_DEBUG=${RADV_DEBUG:-nodcc} WLR_DRM_NO_MODIFIERS=1 GAMESCOPE_COMPOSITE_FORCE=1
 stats_path=${PS5_STATS_PATH:-/run/user/$(id -u)/gamescope-stats.json}
 [[ -d "${stats_path%/*}" ]] || stats_path="${TMPDIR:-/tmp}/gamescope-stats.json"
-args=(-W "$output_w" -H "$output_h" -w "$nested_w" -h "$nested_h" -r "$refresh" --backend drm --prefer-output "$output_conn" --force-composition --disable-layers --disable-color-management --sdr-gamut-wideness 0 --force-grab-cursor --stats-path "$stats_path" -e)
+args=(--backend drm)
+[[ -z "$output_w" ]] || args+=(-W "$output_w" -H "$output_h")
+[[ -z "$nested_w" ]] || args+=(-w "$nested_w" -h "$nested_h")
+[[ -z "$refresh" ]] || args+=(-r "$refresh")
+[[ -z "$output_conn" ]] || args+=(--prefer-output "$output_conn")
+args+=(--force-composition --disable-layers --disable-color-management --sdr-gamut-wideness 0 --force-grab-cursor --stats-path "$stats_path" -e)
 console_log="$steam_dir/logs/console-linux.txt"
 console_offset=0; [[ -f "$console_log" ]] && console_offset=$(wc -c < "$console_log" 2>/dev/null || echo 0)
 log_offset=0; [[ -f "$log_file" ]] && log_offset=$(wc -c < "$log_file" 2>/dev/null || echo 0)

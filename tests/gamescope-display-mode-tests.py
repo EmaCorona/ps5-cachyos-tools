@@ -25,9 +25,12 @@ def modetest_output(connectors):
                 "    index name refresh (Hz) hdisp hss hse htot vdisp vss vse vtot",
             ]
         )
-        for index, (width, height, refresh) in enumerate(modes):
+        for index, mode in enumerate(modes):
+            width, height, refresh = mode[:3]
+            preferred = len(mode) > 3 and mode[3]
+            mode_type = "preferred, driver" if preferred else "driver"
             lines.append(
-                f"  #{index} {width}x{height} {refresh:.2f} {width} 0 0 0 {height} 0 0 0 0 flags: type: driver"
+                f"  #{index} {width}x{height} {refresh:.2f} {width} 0 0 0 {height} 0 0 0 0 flags: type: {mode_type}"
             )
     return "\n".join(lines) + "\n"
 
@@ -68,6 +71,24 @@ class GamescopeDisplayModeTests(unittest.TestCase):
         result = self.run_selector()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "3440\t1440\t100\tHDMI-A-1")
+
+    def test_prefers_kernel_marked_native_mode_over_a_larger_nonpreferred_mode(self):
+        (self.connector / "modes").write_text("3440x1440\n2560x1440\n")
+        self.set_kernel_modes(
+            [(67, "HDMI-A-1", True, [(3440, 1440, 100), (2560, 1440, 60, True)])]
+        )
+        result = self.run_selector()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "2560\t1440\t60\tHDMI-A-1")
+
+    def test_selects_wide_aspect_modes_without_monitor_or_aspect_hardcoding(self):
+        (self.connector / "modes").write_text("1920x1080\n3440x1440\n5120x1440\n")
+        self.set_kernel_modes(
+            [(67, "HDMI-A-1", True, [(1920, 1080, 60), (3440, 1440, 100), (5120, 1440, 120)])]
+        )
+        result = self.run_selector()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "5120\t1440\t120\tHDMI-A-1")
 
     def test_does_not_invent_refresh_absent_from_the_kernel_mode_list(self):
         (self.connector / "modes").write_text("3840x2160\n")

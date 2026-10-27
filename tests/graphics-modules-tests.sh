@@ -365,19 +365,19 @@ shift
 "$@"
 EOF
 chmod 0755 "$tmp/mockbin/steam" "$tmp/mockbin/gamescope"
-printf 'PS5_OUTPUT_WIDTH=1280\nPS5_REFRESH_RATE=60\n' > "$tmp/gamescope.conf"
+printf 'PS5_OUTPUT_WIDTH=1280\nPS5_OUTPUT_HEIGHT=720\nPS5_REFRESH_RATE=60\n' > "$tmp/gamescope.conf"
 if HOME="$wrapper_home" PS5_STEAM_DIR="$wrapper_home/steam" PS5_GAMESCOPE_LOG="$tmp/wrapper.log" \
    PS5_GAMESCOPE_CONFIG="$tmp/gamescope.conf" PS5_DRM_SYSFS_ROOT="$drm_root" PS5_DRM_DEVICE="$tmp/card0" \
    PS5_STEAM_EXEC="$tmp/mockbin/steam" PS5_GAMESCOPE_EXEC="$tmp/mockbin/gamescope" PS5_STEAM_ARGS="$tmp/steam-args" PS5_GAMESCOPE_ARGS="$tmp/gs-args" \
    "$ROOT/modules/gamescope/files/gamescope-session-ps5" >/dev/null 2>&1 && \
-   grep -qx -- '-W' "$tmp/gs-args" && grep -qx '1280' "$tmp/gs-args" && grep -qx '1080' "$tmp/gs-args" && \
+   grep -qx -- '-W' "$tmp/gs-args" && grep -qx '1280' "$tmp/gs-args" && grep -qx -- '-H' "$tmp/gs-args" && grep -qx '720' "$tmp/gs-args" && \
    grep -qx -- '-gamepadui -steamos' "$tmp/steam-args"; then
     ok 'wrapper Gamescope rileva DRM e costruisce gli argomenti con override validato'
 else no 'wrapper Gamescope non applica override/DRM'; fi
 
 cat > "$tmp/fake-gamescope-mode-detector" <<'EOF'
 #!/usr/bin/env bash
-[[ ${PS5_GAMESCOPE_PREFERRED_CONNECTOR:-} == HDMI-A-1 ]] || exit 90
+[[ -z ${PS5_GAMESCOPE_PREFERRED_CONNECTOR:-} || ${PS5_GAMESCOPE_PREFERRED_CONNECTOR:-} == HDMI-A-1 ]] || exit 90
 printf '3440\t1440\t100\tHDMI-A-1\n'
 EOF
 chmod 0755 "$tmp/fake-gamescope-mode-detector"
@@ -387,11 +387,23 @@ if HOME="$wrapper_home" PS5_STEAM_DIR="$wrapper_home/steam" PS5_GAMESCOPE_LOG="$
    PS5_GAMESCOPE_MODE_DETECTOR="$tmp/fake-gamescope-mode-detector" PS5_STEAM_EXEC="$tmp/mockbin/steam" \
    PS5_GAMESCOPE_EXEC="$tmp/mockbin/gamescope" PS5_STEAM_ARGS="$tmp/steam-args" PS5_GAMESCOPE_ARGS="$tmp/dynamic-gs-args" \
    "$ROOT/modules/gamescope/files/gamescope-session-ps5" >/dev/null 2>&1 && \
-   head -n 14 "$tmp/dynamic-gs-args" > "$tmp/dynamic-gs-prefix" && \
-   printf '%s\n' -W 3440 -H 1440 -w 3440 -h 1440 -r 100 --backend drm --prefer-output HDMI-A-1 > "$tmp/dynamic-gs-expected" && \
-   cmp -s "$tmp/dynamic-gs-prefix" "$tmp/dynamic-gs-expected" && grep -q 'refresh=100' "$tmp/dynamic-wrapper.log"; then
-    ok 'wrapper Gamescope applica risoluzione e refresh dinamici rilevati'
-else no 'wrapper Gamescope non applica la modalità dinamica'; fi
+   grep -qx -- '--backend' "$tmp/dynamic-gs-args" && grep -qx 'drm' "$tmp/dynamic-gs-args" && \
+   grep -qx -- '--prefer-output' "$tmp/dynamic-gs-args" && grep -qx 'HDMI-A-1' "$tmp/dynamic-gs-args" && \
+   ! grep -Eq '^(-W|-H|-w|-h|-r)$' "$tmp/dynamic-gs-args" && \
+   grep -q 'connector=HDMI-A-1 3440x1440 aspect=3440:1440 refresh=100 source=DRM-KMS' "$tmp/dynamic-wrapper.log"; then
+    ok 'wrapper mantiene mode DRM, aspect e refresh solo diagnostici e non li fissa al cambio display'
+else no 'wrapper Gamescope fissa dimensioni automatiche invece di seguire il backend DRM'; fi
+
+printf '# automatico: lascia selezione nativa e hotplug al backend Gamescope DRM\n' > "$tmp/automatic-gamescope.conf"
+if HOME="$wrapper_home" PS5_STEAM_DIR="$wrapper_home/steam" PS5_GAMESCOPE_LOG="$tmp/automatic-wrapper.log" \
+   PS5_GAMESCOPE_CONFIG="$tmp/automatic-gamescope.conf" PS5_DRM_SYSFS_ROOT="$drm_root" PS5_DRM_DEVICE="$tmp/card0" \
+   PS5_GAMESCOPE_MODE_DETECTOR="$tmp/fake-gamescope-mode-detector" PS5_STEAM_EXEC="$tmp/mockbin/steam" \
+   PS5_GAMESCOPE_EXEC="$tmp/mockbin/gamescope" PS5_STEAM_ARGS="$tmp/steam-args" PS5_GAMESCOPE_ARGS="$tmp/automatic-gs-args" \
+   "$ROOT/modules/gamescope/files/gamescope-session-ps5" >/dev/null 2>&1 && \
+   ! grep -Eq '^(-W|-H|-w|-h|-r|--prefer-output)$' "$tmp/automatic-gs-args" && \
+   grep -q 'milestone=display_mode_candidate' "$tmp/automatic-wrapper.log"; then
+    ok 'config vuota non blocca resolution, aspect, refresh o connettore automatici'
+else no 'config vuota forza una modalità o un connettore'; fi
 
 # A diagnostic error in the synchronous verifier must stay fail-open, and
 # timeline fields must correlate the wrapper with the requesting session.
