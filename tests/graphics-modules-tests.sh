@@ -72,13 +72,12 @@ if [ -x "$root/usr/local/libexec/ps5-cachyos-tools/gamescope-session" ] && \
    [ -x "$root/usr/local/bin/ps5-cachyos-tools-gamescope-display-mode" ] && \
    [ -x "$root/usr/local/bin/ps5-cachyos-tools-video-diag" ] && \
    [ -x "$root/usr/local/bin/ps5-cachyos-tools-steam-verify-repair" ]; then ok 'wrapper DRM e utility Gamescope installate'; else no 'utility Gamescope incomplete'; fi
-
 if grep -Fq 'KWIN_FORCE_SW_CURSOR=${KWIN_FORCE_SW_CURSOR:-0}' "$root/etc/profile.d/ps5-kde-environment.sh" && \
    grep -q 'KWIN_FORCE_SW_CURSOR' "$root/usr/local/libexec/ps5-cachyos-tools/session-supervisor" && \
    env -u KWIN_FORCE_SW_CURSOR bash -c 'source "$1"; [[ $KWIN_FORCE_SW_CURSOR == 0 ]]' _ "$ROOT/modules/kde/files/ps5-kde-environment.sh" && \
    env KWIN_FORCE_SW_CURSOR=1 bash -c 'source "$1"; [[ $KWIN_FORCE_SW_CURSOR == 1 ]]' _ "$ROOT/modules/kde/files/ps5-kde-environment.sh"; then
-    ok 'KWin software cursor opt-in mantiene default 0 e override 1 propagabile solo alla sessione KDE'
-else no 'configurazione/propagazione KWIN_FORCE_SW_CURSOR incompleta'; fi
+    ok 'KWin mantiene default 0 e override software cursor 1 solo in KDE'
+else no 'default/override KWIN_FORCE_SW_CURSOR o isolamento sessione incompleto'; fi
 
 # A module revision change must refresh the helper assets of installed dependencies.
 sed -i 's/^REVISION=3$/REVISION=1/' "$root/usr/lib/ps5-cachyos-tools/modules/gamescope/module.conf"
@@ -91,7 +90,7 @@ if "$CLI" install --root "$root" --module session > "$tmp/revision-upgrade.log" 
    cmp -s "$ROOT/modules/gamescope/files/ps5-steam-verify-repair" "$root/usr/local/bin/ps5-cachyos-tools-steam-verify-repair" && \
    cmp -s "$ROOT/modules/session/files/session-common.sh" "$root/usr/local/libexec/ps5-cachyos-tools/session-common.sh" && \
    cmp -s "$ROOT/modules/kde/files/ps5-kde-environment.sh" "$root/etc/profile.d/ps5-kde-environment.sh"; then
-    ok 'revisione module aggiorna helper Gamescope e sessione già installati'
+    ok 'revisione module aggiorna helper Gamescope, sessione e ambiente KDE già installati'
 else cat "$tmp/revision-upgrade.log" >&2; no 'aggiornamento selettivo non ha rinfrescato gli helper'; fi
 
 missing_python="$tmp/missing-python"
@@ -227,7 +226,7 @@ plasma="$tmp/startplasma-wayland"
 cat > "$plasma" <<'EOF'
 #!/usr/bin/env bash
 printf 'plasma\n' >> "$PS5_TRACE"
-if [[ -n ${PS5_ENV_TRACE:-} ]]; then printf 'plasma:%s\n' "${KWIN_FORCE_SW_CURSOR-unset}" >> "$PS5_ENV_TRACE"; fi
+if [[ -n ${PS5_ENV_TRACE:-} ]]; then printf '%s|%s|%s|%s\n' "${KWIN_DRM_PREFER_COLOR_DEPTH-unset}" "${KWIN_DRM_NO_DIRECT_SCANOUT-unset}" "${KWIN_FORCE_ASSUME_HDR_SUPPORT-unset}" "${KWIN_FORCE_SW_CURSOR-unset}" >> "$PS5_ENV_TRACE"; fi
 if [[ ${FAKE_PLASMA_WAIT:-0} == 1 ]]; then trap 'exit 0' TERM INT; while :; do sleep 0.1; done; fi
 exit "${PLASMA_RC:-0}"
 EOF
@@ -235,7 +234,7 @@ gamescope_mock="$tmp/gamescope-session"
 cat > "$gamescope_mock" <<'EOF'
 #!/usr/bin/env bash
 printf 'gamescope\n' >> "$PS5_TRACE"
-if [[ -n ${PS5_ENV_TRACE:-} ]]; then printf 'gamescope:%s\n' "${KWIN_FORCE_SW_CURSOR-unset}" >> "$PS5_ENV_TRACE"; fi
+if [[ -n ${PS5_ENV_TRACE:-} ]]; then printf '%s|%s|%s|%s\n' "${KWIN_DRM_PREFER_COLOR_DEPTH-unset}" "${KWIN_DRM_NO_DIRECT_SCANOUT-unset}" "${KWIN_FORCE_ASSUME_HDR_SUPPORT-unset}" "${KWIN_FORCE_SW_CURSOR-unset}" >> "$PS5_ENV_TRACE"; fi
 if [[ ${FAKE_GAMESCOPE_WAIT:-0} == 1 ]]; then sleep 30; fi
 exit "${FAKE_GAMESCOPE_RC:-0}"
 EOF
@@ -252,7 +251,8 @@ printf '#!/usr/bin/env bash\nprintf desktop\n' > "$live/home/session-policy"
 chmod 0755 "$live/home/session-policy"
 PS5_SESSION_RUNTIME="$live/run" PS5_SESSION_COMMON="$COMMON" PS5_SESSION_LOG="$live/home/session.log" \
   PS5_COMMAND_TRACE="$live/commands" PS5_ENV_TRACE="$live/env-trace" PS5_PLASMA_BIN="$plasma" \
-  PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$live/trace" HOME="$live/home" KWIN_FORCE_SW_CURSOR=1 \
+  PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$live/trace" HOME="$live/home" \
+  KWIN_DRM_PREFER_COLOR_DEPTH=24 KWIN_DRM_NO_DIRECT_SCANOUT=1 KWIN_FORCE_ASSUME_HDR_SUPPORT=0 KWIN_FORCE_SW_CURSOR=1 \
   PS5_FORCE_TTY1=1 FAKE_PLASMA_WAIT=1 FAKE_GAMESCOPE_WAIT=1 PATH="$fakebin:$PATH" \
   "$live/home/session-supervisor" >"$live/home/supervisor.out" 2>&1 &
 live_pid=$!
@@ -278,10 +278,11 @@ for _ in {1..100}; do [[ -f "$live/trace" ]] && (( $(grep -xc plasma "$live/trac
 cmp -s "$live/session.conf.expected" "$live/home/.config/ps5-cachyos-tools/session.conf" || live_ok=0
 grep -q 'systemctl --user import-environment .*KWIN_FORCE_SW_CURSOR' "$live/commands" 2>/dev/null || live_ok=0
 grep -q 'systemctl --user unset-environment .*KWIN_FORCE_SW_CURSOR' "$live/commands" 2>/dev/null || live_ok=0
-grep -qx 'gamescope:unset' "$live/env-trace" 2>/dev/null || live_ok=0
-[[ $(grep -xc 'plasma:1' "$live/env-trace" 2>/dev/null || true) -ge 2 ]] || live_ok=0
+printf '24|1|0|1\nunset|unset|unset|unset\n24|1|0|1\n' > "$live/env-trace.expected"
+cmp -s "$live/env-trace.expected" "$live/env-trace" || live_ok=0
 grep -q 'unità KDE opzionale assente, ignorata: xdg-desktop-portal-kde.service' "$live/home/session.log" 2>/dev/null || live_ok=0
-! grep -q 'systemctl --user stop xdg-desktop-portal-kde.service' "$live/commands" 2>/dev/null || live_ok=0
+portal_stop_count=$(grep -c 'systemctl --user stop .*xdg-desktop-portal-kde.service' "$live/commands" 2>/dev/null || true)
+[[ $portal_stop_count == 2 ]] || live_ok=0
 kill -TERM "$live_pid" 2>/dev/null || true
 wait "$live_pid" 2>/dev/null || true
 if (( live_ok )); then ok 'supervisore consente KDE→Gamescope→KDE senza cambiare policy o session.conf'; else cat "$live/home/supervisor.out" "$live/home/session.log" "$live/trace" >&2 2>/dev/null; no 'transizione live KDE/Gamescope'; fi

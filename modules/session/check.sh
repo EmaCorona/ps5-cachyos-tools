@@ -7,4 +7,6 @@ supervisor="$root/usr/local/libexec/ps5-cachyos-tools/session-supervisor"
 [ -f "$profile" ] && [ -x "$supervisor" ] && [ -x "$root/usr/bin/steamos-session-select" ] && \
     [ -x "$root/usr/local/libexec/ps5-cachyos-tools/session-policy" ] && \
     [ -f "$common" ] && \
-    grep -q 'gamescope' "$supervisor" && grep -q 'FALLBACK' "$supervisor"
+    grep -q 'gamescope' "$supervisor" && grep -q 'FALLBACK' "$supervisor" && \
+    grep -q 'import-environment .*KWIN_FORCE_SW_CURSOR' "$supervisor" && \
+    grep -Fq -- '-u KWIN_FORCE_SW_CURSOR' "$supervisor"

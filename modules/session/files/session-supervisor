@@ -67,6 +67,7 @@ fi
 # Load the KDE profile in the long-lived supervisor too. This preserves
 # explicit administrator KWin overrides across KDE→Gamescope→KDE switches.
 if (( ! is_session_child )) && [[ -r /etc/profile.d/ps5-kde-environment.sh ]]; then
+    # shellcheck source=/dev/null
     source /etc/profile.d/ps5-kde-environment.sh
 fi
 export LIBSEAT_BACKEND=logind
@@ -153,8 +154,8 @@ clear_kde_environment() {
         local variable
         for variable in "${variables[@]}"; do dbus-update-activation-environment --systemd "--unset=$variable" 2>/dev/null || true; done
     fi
-    # Keep the configured KWin overrides in the supervisor so a later KDE
-    # child receives them. Gamescope is launched with these names filtered.
+    # Keep the configured KWin overrides in the supervisor for a later KDE
+    # launch. The Gamescope child receives them filtered explicitly.
     unset WAYLAND_DISPLAY DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP KDE_SESSION_VERSION
 }
 
