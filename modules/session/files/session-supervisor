@@ -64,6 +64,11 @@ else
         fi
     fi
 fi
+# Load the KDE profile in the long-lived supervisor too. This preserves
+# explicit administrator KWin overrides across KDE→Gamescope→KDE switches.
+if (( ! is_session_child )) && [[ -r /etc/profile.d/ps5-kde-environment.sh ]]; then
+    source /etc/profile.d/ps5-kde-environment.sh
+fi
 export LIBSEAT_BACKEND=logind
 
 system_stopping() {
@@ -125,10 +130,10 @@ prepare_kde() {
     export XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=KDE XDG_SESSION_DESKTOP=KDE KDE_SESSION_VERSION=6
     if command -v systemctl >/dev/null 2>&1; then
         systemctl --user stop xdg-desktop-portal.service xdg-desktop-portal-gtk.service xdg-desktop-portal-kde.service 2>/dev/null || true
-        systemctl --user import-environment XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP KDE_SESSION_VERSION KWIN_DRM_PREFER_COLOR_DEPTH KWIN_DRM_NO_DIRECT_SCANOUT KWIN_FORCE_ASSUME_HDR_SUPPORT 2>/dev/null || true
+        systemctl --user import-environment XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP KDE_SESSION_VERSION KWIN_DRM_PREFER_COLOR_DEPTH KWIN_DRM_NO_DIRECT_SCANOUT KWIN_FORCE_ASSUME_HDR_SUPPORT KWIN_FORCE_SW_CURSOR 2>/dev/null || true
     fi
     if command -v dbus-update-activation-environment >/dev/null 2>&1 && [[ -n ${DBUS_SESSION_BUS_ADDRESS:-} ]]; then
-        dbus-update-activation-environment --systemd XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP KDE_SESSION_VERSION KWIN_DRM_PREFER_COLOR_DEPTH KWIN_DRM_NO_DIRECT_SCANOUT KWIN_FORCE_ASSUME_HDR_SUPPORT 2>/dev/null || true
+        dbus-update-activation-environment --systemd XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP KDE_SESSION_VERSION KWIN_DRM_PREFER_COLOR_DEPTH KWIN_DRM_NO_DIRECT_SCANOUT KWIN_FORCE_ASSUME_HDR_SUPPORT KWIN_FORCE_SW_CURSOR 2>/dev/null || true
     fi
     if [[ -x /usr/lib/plasma-dbus-run-session-if-needed && ${PS5_FORCE_TTY1:-0} != 1 ]]; then
         /usr/lib/plasma-dbus-run-session-if-needed "$plasma_bin"
@@ -142,13 +147,15 @@ prepare_kde() {
 }
 
 clear_kde_environment() {
-    local variables=(WAYLAND_DISPLAY DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP KDE_SESSION_VERSION)
+    local variables=(WAYLAND_DISPLAY DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP KDE_SESSION_VERSION KWIN_DRM_PREFER_COLOR_DEPTH KWIN_DRM_NO_DIRECT_SCANOUT KWIN_FORCE_ASSUME_HDR_SUPPORT KWIN_FORCE_SW_CURSOR)
     if command -v systemctl >/dev/null 2>&1; then systemctl --user unset-environment "${variables[@]}" 2>/dev/null || true; fi
     if command -v dbus-update-activation-environment >/dev/null 2>&1; then
         local variable
         for variable in "${variables[@]}"; do dbus-update-activation-environment --systemd "--unset=$variable" 2>/dev/null || true; done
     fi
-    unset "${variables[@]}"
+    # Keep the configured KWin overrides in the supervisor so a later KDE
+    # child receives them. Gamescope is launched with these names filtered.
+    unset WAYLAND_DISPLAY DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP KDE_SESSION_VERSION
 }
 
 terminate_process_group() {
@@ -163,38 +170,56 @@ terminate_process_group() {
     wait "$pid" 2>/dev/null || true
 }
 
-seat_status_has_device() {
-    local status=$1 card_name=$2
-    awk -v wanted="drm:$card_name" '$NF == wanted { found = 1 } END { exit !found }' <<<"$status"
+systemd_unit_state() {
+    local unit=$1 output
+    command -v systemctl >/dev/null 2>&1 || return 1
+    output=$(systemctl --user show "$unit" -p LoadState -p ActiveState --value 2>/dev/null) || return 1
+    [[ $output == *$'\n'* ]] || return 1
+    printf '%s\n' "$output"
 }
 
-seat_status_master_line() {
-    local status=$1 card_name=$2
-    awk -v wanted="drm:$card_name" 'index($0, "[MASTER]") && $NF == wanted { print; exit }' <<<"$status"
+stop_kde_units() {
+    local unit state load_state stop_rc=0
+    local units=(plasma-workspace-wayland.target plasma-core.target plasma-kwin_wayland.service plasma-plasmashell.service xdg-desktop-portal.service xdg-desktop-portal-kde.service xdg-desktop-portal-gtk.service)
+    command -v systemctl >/dev/null 2>&1 || return 1
+    for unit in "${units[@]}"; do
+        state=$(systemctl --user show "$unit" -p LoadState -p ActiveState --value 2>/dev/null) || {
+            ps5_session_log warning "stato systemd non leggibile per $unit"
+            stop_rc=1
+            continue
+        }
+        load_state=${state%%$'\n'*}
+        if [[ $load_state == not-found ]]; then
+            ps5_session_log info "unità KDE opzionale assente, ignorata: $unit"
+            continue
+        fi
+        systemctl --user stop "$unit" 2>/dev/null || {
+            ps5_session_log warning "systemd non ha arrestato $unit"
+            stop_rc=1
+        }
+    done
+    return "$stop_rc"
 }
 
-wait_for_seat_release() {
-    local started=$SECONDS status master_line card_name=${drm_device##*/}
-    command -v loginctl >/dev/null 2>&1 || {
-        ps5_session_log error 'loginctl assente; impossibile verificare il rilascio DRM'
+wait_for_kde_compositor_stop() {
+    local started=$SECONDS state load_state active_state
+    command -v systemctl >/dev/null 2>&1 || {
+        ps5_session_log error 'systemctl --user assente; impossibile verificare l’arresto di KWin'
         return 1
     }
     while :; do
-        status=$(loginctl seat-status seat0 --no-pager 2>/dev/null) || {
-            ps5_session_log error 'loginctl non ha restituito lo stato di seat0; Gamescope non verrà avviato'
+        state=$(systemd_unit_state plasma-kwin_wayland.service) || {
+            ps5_session_log error 'stato plasma-kwin_wayland.service non verificabile; Gamescope non verrà avviato'
             return 1
         }
-        if ! seat_status_has_device "$status" "$card_name"; then
-            ps5_session_log error "stato seat0 incompleto: device drm:$card_name non identificato; Gamescope non verrà avviato"
-            return 1
-        fi
-        if [[ -z $(seat_status_master_line "$status" "$card_name") ]]; then
-            ps5_session_log info "seat0 rilasciato per $card_name"
+        load_state=${state%%$'\n'*}
+        active_state=${state#*$'\n'}
+        if [[ $load_state == loaded && ( $active_state == inactive || $active_state == failed ) ]]; then
+            ps5_session_log info "compositor KWin fermo (ActiveState=$active_state)"
             return 0
         fi
         if (( SECONDS - started >= seat_release_timeout )); then
-            master_line=$(seat_status_master_line "$status" "$card_name")
-            ps5_session_log error "timeout rilascio seat0 dopo ${seat_release_timeout}s; owner ancora attivo: ${master_line:-sconosciuto}"
+            ps5_session_log error "timeout arresto KWin dopo ${seat_release_timeout}s (LoadState=$load_state ActiveState=$active_state)"
             return 1
         fi
         sleep 0.1 || true
@@ -302,13 +327,11 @@ cleanup_gamescope() {
 cleanup_kde() {
     local pid=$1 stop_rc=0
     verify_single_user_session || return 3
-    if command -v systemctl >/dev/null 2>&1; then
-        systemctl --user stop plasma-workspace-wayland.target plasma-core.target plasma-kwin_wayland.service plasma-plasmashell.service xdg-desktop-portal.service xdg-desktop-portal-kde.service xdg-desktop-portal-gtk.service 2>/dev/null || stop_rc=$?
-    fi
+    stop_kde_units || stop_rc=$?
     clear_kde_environment
     terminate_process_group "$pid"
     (( stop_rc == 0 )) || ps5_session_log warning "systemd non ha confermato l'arresto ordinato di KDE (exit=$stop_rc)"
-    wait_for_seat_release
+    wait_for_kde_compositor_stop
 }
 
 report_gamescope_failure() {
@@ -329,7 +352,10 @@ report_gamescope_failure() {
 if (( is_session_child )); then
     case "$requested" in
         desktop) prepare_kde; exit $? ;;
-        gamescope) [[ -x $gamescope_bin ]] || exit 127; exec "$gamescope_bin" ;;
+        gamescope)
+            [[ -x $gamescope_bin ]] || exit 127
+            exec env -u KWIN_DRM_PREFER_COLOR_DEPTH -u KWIN_DRM_NO_DIRECT_SCANOUT -u KWIN_FORCE_ASSUME_HDR_SUPPORT -u KWIN_FORCE_SW_CURSOR "$gamescope_bin"
+            ;;
     esac
 fi
 
@@ -359,8 +385,8 @@ launch_active_session() {
                     *) report_gamescope_failure "DRM non pronto entro ${timeout}s" 1; requested=desktop; return 4 ;;
                 esac
             fi
-            if ! wait_for_seat_release; then
-                report_gamescope_failure 'seat DRM ancora occupato o stato non verificabile' 1
+            if ! wait_for_kde_compositor_stop; then
+                report_gamescope_failure 'compositor KWin ancora attivo o stato non verificabile' 1
                 requested=desktop
                 return 4
             fi

@@ -73,14 +73,24 @@ if [ -x "$root/usr/local/libexec/ps5-cachyos-tools/gamescope-session" ] && \
    [ -x "$root/usr/local/bin/ps5-cachyos-tools-video-diag" ] && \
    [ -x "$root/usr/local/bin/ps5-cachyos-tools-steam-verify-repair" ]; then ok 'wrapper DRM e utility Gamescope installate'; else no 'utility Gamescope incomplete'; fi
 
+if grep -Fq 'KWIN_FORCE_SW_CURSOR=${KWIN_FORCE_SW_CURSOR:-0}' "$root/etc/profile.d/ps5-kde-environment.sh" && \
+   grep -q 'KWIN_FORCE_SW_CURSOR' "$root/usr/local/libexec/ps5-cachyos-tools/session-supervisor" && \
+   env -u KWIN_FORCE_SW_CURSOR bash -c 'source "$1"; [[ $KWIN_FORCE_SW_CURSOR == 0 ]]' _ "$ROOT/modules/kde/files/ps5-kde-environment.sh" && \
+   env KWIN_FORCE_SW_CURSOR=1 bash -c 'source "$1"; [[ $KWIN_FORCE_SW_CURSOR == 1 ]]' _ "$ROOT/modules/kde/files/ps5-kde-environment.sh"; then
+    ok 'KWin software cursor opt-in mantiene default 0 e override 1 propagabile solo alla sessione KDE'
+else no 'configurazione/propagazione KWIN_FORCE_SW_CURSOR incompleta'; fi
+
 # A module revision change must refresh the helper assets of installed dependencies.
 sed -i 's/^REVISION=3$/REVISION=1/' "$root/usr/lib/ps5-cachyos-tools/modules/gamescope/module.conf"
-sed -i 's/^REVISION=5$/REVISION=4/' "$root/usr/lib/ps5-cachyos-tools/modules/session/module.conf"
+sed -i 's/^REVISION=3$/REVISION=1/' "$root/usr/lib/ps5-cachyos-tools/modules/kde/module.conf"
+sed -i 's/^REVISION=7$/REVISION=4/' "$root/usr/lib/ps5-cachyos-tools/modules/session/module.conf"
 printf 'stale helper\n' > "$root/usr/local/bin/ps5-cachyos-tools-steam-verify-repair"
 printf 'stale session runtime\n' > "$root/usr/local/libexec/ps5-cachyos-tools/session-common.sh"
+printf 'stale KDE environment\n' > "$root/etc/profile.d/ps5-kde-environment.sh"
 if "$CLI" install --root "$root" --module session > "$tmp/revision-upgrade.log" 2>&1 && \
    cmp -s "$ROOT/modules/gamescope/files/ps5-steam-verify-repair" "$root/usr/local/bin/ps5-cachyos-tools-steam-verify-repair" && \
-   cmp -s "$ROOT/modules/session/files/session-common.sh" "$root/usr/local/libexec/ps5-cachyos-tools/session-common.sh"; then
+   cmp -s "$ROOT/modules/session/files/session-common.sh" "$root/usr/local/libexec/ps5-cachyos-tools/session-common.sh" && \
+   cmp -s "$ROOT/modules/kde/files/ps5-kde-environment.sh" "$root/etc/profile.d/ps5-kde-environment.sh"; then
     ok 'revisione module aggiorna helper Gamescope e sessione già installati'
 else cat "$tmp/revision-upgrade.log" >&2; no 'aggiornamento selettivo non ha rinfrescato gli helper'; fi
 
@@ -160,6 +170,13 @@ cat > "$fakebin/systemctl" <<'EOF'
 #!/usr/bin/env bash
 printf 'systemctl %s\n' "$*" >> "${PS5_COMMAND_TRACE:-/dev/null}"
 [[ ${1:-} != is-system-running ]] || { echo running; exit 0; }
+if [[ ${1:-} == --user && ${2:-} == show ]]; then
+    case "${3:-}" in
+        xdg-desktop-portal-kde.service) printf 'not-found\ninactive\n' ;;
+        *) printf 'loaded\ninactive\n' ;;
+    esac
+    exit 0
+fi
 exit 0
 EOF
 for command in pgrep pkill loginctl; do
@@ -210,6 +227,7 @@ plasma="$tmp/startplasma-wayland"
 cat > "$plasma" <<'EOF'
 #!/usr/bin/env bash
 printf 'plasma\n' >> "$PS5_TRACE"
+if [[ -n ${PS5_ENV_TRACE:-} ]]; then printf 'plasma:%s\n' "${KWIN_FORCE_SW_CURSOR-unset}" >> "$PS5_ENV_TRACE"; fi
 if [[ ${FAKE_PLASMA_WAIT:-0} == 1 ]]; then trap 'exit 0' TERM INT; while :; do sleep 0.1; done; fi
 exit "${PLASMA_RC:-0}"
 EOF
@@ -217,6 +235,7 @@ gamescope_mock="$tmp/gamescope-session"
 cat > "$gamescope_mock" <<'EOF'
 #!/usr/bin/env bash
 printf 'gamescope\n' >> "$PS5_TRACE"
+if [[ -n ${PS5_ENV_TRACE:-} ]]; then printf 'gamescope:%s\n' "${KWIN_FORCE_SW_CURSOR-unset}" >> "$PS5_ENV_TRACE"; fi
 if [[ ${FAKE_GAMESCOPE_WAIT:-0} == 1 ]]; then sleep 30; fi
 exit "${FAKE_GAMESCOPE_RC:-0}"
 EOF
@@ -232,7 +251,8 @@ cp "$ROOT/modules/session/files/session-policy" "$live/home/session-policy"
 printf '#!/usr/bin/env bash\nprintf desktop\n' > "$live/home/session-policy"
 chmod 0755 "$live/home/session-policy"
 PS5_SESSION_RUNTIME="$live/run" PS5_SESSION_COMMON="$COMMON" PS5_SESSION_LOG="$live/home/session.log" \
-  PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$live/trace" HOME="$live/home" \
+  PS5_COMMAND_TRACE="$live/commands" PS5_ENV_TRACE="$live/env-trace" PS5_PLASMA_BIN="$plasma" \
+  PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$live/trace" HOME="$live/home" KWIN_FORCE_SW_CURSOR=1 \
   PS5_FORCE_TTY1=1 FAKE_PLASMA_WAIT=1 FAKE_GAMESCOPE_WAIT=1 PATH="$fakebin:$PATH" \
   "$live/home/session-supervisor" >"$live/home/supervisor.out" 2>&1 &
 live_pid=$!
@@ -256,11 +276,17 @@ for _ in {1..100}; do [[ -f "$live/trace" ]] && (( $(grep -xc plasma "$live/trac
 [[ -f "$live/trace" ]] && (( $(grep -xc plasma "$live/trace") >= 2 )) || live_ok=0
 "$live/home/session-policy" | grep -qx desktop || live_ok=0
 cmp -s "$live/session.conf.expected" "$live/home/.config/ps5-cachyos-tools/session.conf" || live_ok=0
+grep -q 'systemctl --user import-environment .*KWIN_FORCE_SW_CURSOR' "$live/commands" 2>/dev/null || live_ok=0
+grep -q 'systemctl --user unset-environment .*KWIN_FORCE_SW_CURSOR' "$live/commands" 2>/dev/null || live_ok=0
+grep -qx 'gamescope:unset' "$live/env-trace" 2>/dev/null || live_ok=0
+[[ $(grep -xc 'plasma:1' "$live/env-trace" 2>/dev/null || true) -ge 2 ]] || live_ok=0
+grep -q 'unità KDE opzionale assente, ignorata: xdg-desktop-portal-kde.service' "$live/home/session.log" 2>/dev/null || live_ok=0
+! grep -q 'systemctl --user stop xdg-desktop-portal-kde.service' "$live/commands" 2>/dev/null || live_ok=0
 kill -TERM "$live_pid" 2>/dev/null || true
 wait "$live_pid" 2>/dev/null || true
 if (( live_ok )); then ok 'supervisore consente KDE→Gamescope→KDE senza cambiare policy o session.conf'; else cat "$live/home/supervisor.out" "$live/home/session.log" "$live/trace" >&2 2>/dev/null; no 'transizione live KDE/Gamescope'; fi
 
-# If another DRM master remains, the live switch is rejected and KDE is restored.
+# If KWin remains active, the live switch is rejected and KDE is restored.
 busy_seat="$tmp/busy-seat"
 mkdir -p "$busy_seat/home" "$busy_seat/run" "$busy_seat/bin"
 cp "$SUPERVISOR" "$busy_seat/home/session-supervisor"
@@ -268,15 +294,15 @@ cat > "$busy_seat/home/session-policy" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' gamescope
 EOF
-cat > "$busy_seat/bin/loginctl" <<'EOF'
+cat > "$busy_seat/bin/systemctl" <<'EOF'
 #!/usr/bin/env bash
-if [[ ${1:-} == seat-status ]]; then
-    printf 'seat0\n  [MASTER] drm:card0\n'
+if [[ ${1:-} == --user && ${2:-} == show ]]; then
+    if [[ ${3:-} == plasma-kwin_wayland.service ]]; then printf 'loaded\nactive\n'; else printf 'loaded\ninactive\n'; fi
     exit 0
 fi
-exit 1
+exit 0
 EOF
-chmod 0755 "$busy_seat/home/session-policy" "$busy_seat/bin/loginctl"
+chmod 0755 "$busy_seat/home/session-policy" "$busy_seat/bin/systemctl"
 busy_ok=1
 if PS5_SESSION_RUNTIME="$busy_seat/run" PS5_SESSION_COMMON="$COMMON" PS5_SESSION_LOG="$busy_seat/home/session.log" \
    PS5_FALLBACK_LOG="$busy_seat/home/fallback.log" PS5_ALERT_FILE="$busy_seat/home/alert.txt" \
@@ -285,60 +311,9 @@ if PS5_SESSION_RUNTIME="$busy_seat/run" PS5_SESSION_COMMON="$COMMON" PS5_SESSION
    PATH="$busy_seat/bin:$fakebin:$PATH" "$busy_seat/home/session-supervisor" >/dev/null 2>&1; then
     grep -qx plasma "$busy_seat/trace" 2>/dev/null || busy_ok=0
     grep -qx gamescope "$busy_seat/trace" 2>/dev/null && busy_ok=0
-    grep -q 'seat DRM ancora occupato' "$busy_seat/home/fallback.log" 2>/dev/null || busy_ok=0
+    grep -q 'compositor KWin ancora attivo' "$busy_seat/home/fallback.log" 2>/dev/null || busy_ok=0
 else busy_ok=0; fi
-if (( busy_ok )); then ok 'owner DRM residuo rifiuta Gamescope e avvia KDE senza kill globale'; else cat "$busy_seat/home/session.log" "$busy_seat/home/fallback.log" "$busy_seat/trace" >&2 2>/dev/null; no 'seat occupato non protegge il fallback'; fi
-
-incomplete_seat="$tmp/incomplete-seat"
-mkdir -p "$incomplete_seat/home" "$incomplete_seat/run" "$incomplete_seat/bin"
-cp "$SUPERVISOR" "$incomplete_seat/home/session-supervisor"
-cp "$busy_seat/home/session-policy" "$incomplete_seat/home/session-policy"
-cat > "$incomplete_seat/bin/loginctl" <<'EOF'
-#!/usr/bin/env bash
-if [[ ${1:-} == seat-status ]]; then
-    if [[ ${FAKE_SEAT_STATUS_MODE:-empty} == prefix ]]; then printf 'seat0\n  drm:card10\n'; else printf 'seat0\n'; fi
-    exit 0
-fi
-if [[ ${1:-} == show-session ]]; then
-    case "${2:-}:${4:-}" in
-        1:User) echo 1000;; 1:Class) echo user;; 1:Seat) echo seat0;; 1:Active) echo yes;;
-        2:User) echo 1000;; 2:Class) echo manager;; 2:Seat) echo '';; 2:Active) echo yes;;
-        *) exit 1;;
-    esac
-    exit 0
-fi
-if [[ ${1:-} == show-user && ${4:-} == Sessions ]]; then printf '1 2\n'; exit 0; fi
-if [[ ${1:-} == list-sessions ]]; then printf '1 1000 steam seat0 tty1 no -\n2 1000 steam - - no -\n'; exit 0; fi
-exit 1
-EOF
-chmod 0755 "$incomplete_seat/home/session-policy" "$incomplete_seat/bin/loginctl"
-incomplete_ok=1
-if PS5_SESSION_RUNTIME="$incomplete_seat/run" PS5_SESSION_COMMON="$COMMON" PS5_SESSION_LOG="$incomplete_seat/home/session.log" \
-   PS5_FALLBACK_LOG="$incomplete_seat/home/fallback.log" PS5_ALERT_FILE="$incomplete_seat/home/alert.txt" \
-   PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$incomplete_seat/trace" HOME="$incomplete_seat/home" \
-   PS5_FORCE_TTY1=1 PS5_SESSION_SKIP_DRM_WAIT=1 PATH="$incomplete_seat/bin:$fakebin:$PATH" \
-   "$incomplete_seat/home/session-supervisor" >/dev/null 2>&1; then
-    grep -qx plasma "$incomplete_seat/trace" 2>/dev/null || incomplete_ok=0
-    grep -qx gamescope "$incomplete_seat/trace" 2>/dev/null && incomplete_ok=0
-    grep -q 'device drm:card0 non identificato' "$incomplete_seat/home/session.log" 2>/dev/null || incomplete_ok=0
-else incomplete_ok=0; fi
-if (( incomplete_ok )); then ok 'stato seat incompleto è fail-closed e avvia KDE'; else cat "$incomplete_seat/home/session.log" "$incomplete_seat/home/fallback.log" "$incomplete_seat/trace" >&2 2>/dev/null; no 'stato seat incompleto viene trattato come libero'; fi
-
-: > "$incomplete_seat/trace"
-: > "$incomplete_seat/home/session.log"
-: > "$incomplete_seat/home/fallback.log"
-prefix_ok=1
-if FAKE_SEAT_STATUS_MODE=prefix PS5_DRM_DEVICE=/dev/dri/card1 \
-   PS5_SESSION_RUNTIME="$incomplete_seat/run" PS5_SESSION_COMMON="$COMMON" PS5_SESSION_LOG="$incomplete_seat/home/session.log" \
-   PS5_FALLBACK_LOG="$incomplete_seat/home/fallback.log" PS5_ALERT_FILE="$incomplete_seat/home/alert.txt" \
-   PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$incomplete_seat/trace" HOME="$incomplete_seat/home" \
-   PS5_FORCE_TTY1=1 PS5_SESSION_SKIP_DRM_WAIT=1 PATH="$incomplete_seat/bin:$fakebin:$PATH" \
-   "$incomplete_seat/home/session-supervisor" >/dev/null 2>&1; then
-    grep -qx plasma "$incomplete_seat/trace" 2>/dev/null || prefix_ok=0
-    grep -qx gamescope "$incomplete_seat/trace" 2>/dev/null && prefix_ok=0
-    grep -q 'device drm:card1 non identificato' "$incomplete_seat/home/session.log" 2>/dev/null || prefix_ok=0
-else prefix_ok=0; fi
-if (( prefix_ok )); then ok 'device DRM card1 non viene confuso con card10'; else cat "$incomplete_seat/home/session.log" "$incomplete_seat/home/fallback.log" "$incomplete_seat/trace" >&2 2>/dev/null; no 'corrispondenza DRM confonde card1 e card10'; fi
+if (( busy_ok )); then ok 'KWin ancora attivo rifiuta Gamescope e ripristina KDE'; else cat "$busy_seat/home/session.log" "$busy_seat/home/fallback.log" "$busy_seat/trace" >&2 2>/dev/null; no 'KWin attivo non protegge il fallback'; fi
 
 multi_session="$tmp/multi-session"
 mkdir -p "$multi_session/home" "$multi_session/run" "$multi_session/bin" "$multi_session/home/.config/ps5-cachyos-tools"
@@ -349,7 +324,6 @@ printf '%s\n' desktop
 EOF
 cat > "$multi_session/bin/loginctl" <<'EOF'
 #!/usr/bin/env bash
-if [[ ${1:-} == seat-status ]]; then printf 'seat0\n  drm:card0\n'; exit 0; fi
 if [[ ${1:-} == show-session ]]; then
     case "${2:-}:${4:-}" in
         1:User|3:User|2:User) echo 1000;;
