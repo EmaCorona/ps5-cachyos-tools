@@ -19,7 +19,7 @@ The project includes independent modules for system management, graphics session
 - **`fan`** — PS5 thermal controller with 15 temperature zones and `low`, `balanced`, and `high` profiles. It runs as a systemd service and reports readiness and degraded states.
 - **`boot-cleanup`** — conservative early-boot task that only removes verified stale Steam artifacts from an explicit allowlist. A separate manual helper normalizes `/tmp/dumps` permissions without deleting its contents.
 - **`kde`, `gamescope`, and `session`** — prepare KDE Plasma Wayland and Gamescope DRM; the `session` supervisor launches KDE by default from a versioned TTY1 boot policy, handles live KDE/Gamescope switches, and falls back to KDE if Gamescope fails.
-- **`vram`** — writes the selected allocation to `vram.txt` on the loader's FAT32 partition. Its first-install default is **4 GiB**; the value can be selected during installation.
+- **`vram`** — writes the selected allocation to `vram.txt` on the loader's FAT32 partition. When both configuration files are absent, a new installation defaults to **512 MiB**; valid existing values are preserved, and an explicit value can be selected during installation. Invalid or conflicting configurations fail closed unless an explicit value resolves them.
 
 Gamescope selects the connected DRM/KMS mode with the highest resolution (then refresh rate), with optional overrides in `/etc/ps5-cachyos-tools/gamescope.conf`; if `modetest` is unavailable, its mode detector uses 60 Hz as a fallback. KDE selects from KScreen/EDID modes at desktop startup. Detection alone does not guarantee a working HDMI signal or a correctly scaled Steam UI.
 
@@ -60,7 +60,7 @@ sudo ./bin/ps5-cachyos-tools install --live --boot /boot/efi --dry-run
 sudo ./bin/ps5-cachyos-tools install --live --boot /boot/efi
 ```
 
-The live installer requires administrative privileges and PS5 platform detection. It enables and starts the fan service after successful installation. `boot-cleanup` runs through `ps5-tools-early.service` at a subsequent boot, or can be invoked with `reapply`. KDE, Gamescope, and session tasks validate their artifacts at normal boot; a login shell on TTY1 starts the session supervisor, which launches KDE by default, accepts temporary switches to Gamescope, and falls back to KDE if Gamescope fails. The framework does not install KDE/Gamescope packages or update Steam. The VRAM module writes the selected byte count in hexadecimal to `vram.txt`; its initial default is 4 GiB. The loader reads that file during a later Linux boot.
+The live installer requires administrative privileges and PS5 platform detection. It enables and starts the fan service after successful installation. `boot-cleanup` runs through `ps5-tools-early.service` at a subsequent boot, or can be invoked with `reapply`. KDE, Gamescope, and session tasks validate their artifacts at normal boot; a login shell on TTY1 starts the session supervisor, which launches KDE by default, accepts temporary switches to Gamescope, and falls back to KDE if Gamescope fails. The framework does not install KDE/Gamescope packages or update Steam. The VRAM module writes the selected byte count in hexadecimal to `vram.txt`; when both root and FAT configuration files are absent, a new installation defaults to 512 MiB. Existing valid values are preserved; malformed or conflicting values fail closed unless explicitly resolved. The loader reads that file during a later Linux boot.
 
 ### Install selected modules or set VRAM explicitly
 
@@ -78,7 +78,7 @@ sudo ./bin/ps5-cachyos-tools install --live --module boot-cleanup
 sudo ./bin/ps5-cachyos-tools install --live --module vram --boot /boot/efi --vram-size 6GiB
 ```
 
-Supported VRAM values are `512MiB` and `1GiB` through `8GiB`. If `--vram-size` is omitted, the module preserves a valid existing configuration or `vram.txt`; if neither exists on first installation, it uses 4 GiB. `512MiB` is the loader's dynamic-allocation setting. The `vram.txt` file is retained when the module is removed, so the loader continues to use the last configured value.
+Supported VRAM values are `512MiB` and `1GiB` through `8GiB`. If `--vram-size` is omitted, the module preserves a valid existing configuration or `vram.txt`; if both files are absent on first installation, it uses 512 MiB. Malformed or conflicting configurations fail closed unless explicitly resolved. `512MiB` is the loader's dynamic-allocation setting. The `vram.txt` file is retained when the module is removed, so the loader continues to use the last configured value.
 
 ### Switch between KDE and Gamescope
 

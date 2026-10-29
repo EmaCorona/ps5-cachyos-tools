@@ -1,6 +1,10 @@
 # Registro fix
 
+- 2026-10-29 — [`baa7e8cfe6cb`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/baa7e8cfe6cbca75422d6883fccf4c19391a9634): [default VRAM 512 MiB e configurazioni persistenti](fix-baa7e8cfe6cb-vram-default-persistence.md), conflitti root/FAT fail-closed, rimozione keep/purge coerente e runbook AMDGPU; probe Vulkan conferma 640 MiB residenti in GTT con carveout da 512 MiB. Una partita Proton Experimental precedente al run ridotto ha avuto un OOM globale che l’utente attribuisce al carico eccessivo; il run ridotto seguente termina normalmente. Il runtime Gamescope usa il pacchetto 3.17.0-4 con fingerprint del patch corrispondente al branch.
+
 - 2026-10-29 — [`46dcb0011a7e`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/46dcb0011a7ec6e6913e19f8dbcb69a46b690eca): [override diagnostico reversibile KWin](fix-46dcb0011a7e-kde-amdgpu-ra24-software-cursor.md) per errori AMDGPU RA24; A/B hardware 16:9 ancora da eseguire.
+
+- 2026-10-28 — [diagnostica DRM ultrawide Gamescope](fix-gamescope-ultrawide-drm-diagnostics.md): telemetria opt-in e limitata di commit, flip e scanout; build e test software superati, acquisizione hardware non eseguita.
 
 - 2026-10-28 — [`e262376`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/e262376): [switch KDE/Gamescope: verifica KWin e preservazione override](fix-kde-gamescope-black-screen-switch-gate.md), sostituito il proxy `loginctl seat-status [MASTER]` con lo stato systemd di KWin, ignorate le unità portal opzionali non installate e mantenuti gli override KWin solo nei processi KDE.
 

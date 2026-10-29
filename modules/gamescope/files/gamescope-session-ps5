@@ -42,7 +42,7 @@ log() {
 
 # An absent override means that the best mode exposed by the connected DRM
 # connector and its EDID remains authoritative.
-output_w='' output_h='' nested_w='' nested_h='' refresh='' output_conn=''
+output_w='' output_h='' nested_w='' nested_h='' refresh='' output_conn='' drm_diagnostics=0
 if [[ -e "$config" ]]; then
     [[ -f "$config" && ! -L "$config" ]] || { log "configurazione Gamescope non regolare: $config"; exit 78; }
     declare -A seen=()
@@ -55,6 +55,7 @@ if [[ -e "$config" ]]; then
             PS5_OUTPUT_WIDTH) output_w=$value;; PS5_OUTPUT_HEIGHT) output_h=$value;;
             PS5_NESTED_WIDTH) nested_w=$value;; PS5_NESTED_HEIGHT) nested_h=$value;;
             PS5_REFRESH_RATE) refresh=$value;; PS5_OUTPUT_CONN) output_conn=$value;;
+            PS5_DRM_DIAGNOSTICS) drm_diagnostics=$value;;
             *) log "chiave non supportata: $key"; exit 78;;
         esac
     done < "$config"
@@ -78,6 +79,7 @@ if [[ -n "$refresh" ]]; then
     (( refresh >= 24 && refresh <= 240 )) || { log 'frequenza configurata fuori dai limiti'; exit 78; }
 fi
 [[ -z "$output_conn" || "$output_conn" =~ ^[A-Za-z0-9_-]+$ ]] || { log 'connettore non valido'; exit 78; }
+[[ "$drm_diagnostics" == 0 || "$drm_diagnostics" == 1 ]] || { log 'PS5_DRM_DIAGNOSTICS deve valere 0 oppure 1'; exit 78; }
 detected_conn='' detected_w='' detected_h='' detected_refresh=''
 detector=${PS5_GAMESCOPE_MODE_DETECTOR:-/usr/local/bin/ps5-cachyos-tools-gamescope-display-mode}
 if [[ -x "$detector" ]]; then
@@ -109,6 +111,12 @@ else
     log "warning=Steam manifest helper unavailable: $verify_helper; continuing fail-open"
 fi
 export LIBSEAT_BACKEND=logind STEAM_ENABLE_DECK_UI=1 GAMESCOPE_FORCE_GRAB_CURSOR=1
+if [[ "$drm_diagnostics" == 1 ]]; then
+    export PS5_GAMESCOPE_DRM_DIAGNOSTICS=1
+    log 'milestone=drm_diagnostics_enabled scope=first-32-commits-and-page-flips'
+else
+    unset PS5_GAMESCOPE_DRM_DIAGNOSTICS
+fi
 export XDG_CURRENT_DESKTOP=gamescope XDG_SESSION_TYPE=wayland WLR_DRM_DEVICES="$drm_device"
 export GAMESCOPE_SCRIPT_PATH="$gamescope_scripts"
 export GAMESCOPE_DISPLAY_SUPPORTS_HDR=0 GAMESCOPE_DISPLAY_HDR_ENABLED=0 GAMESCOPE_COLOR_MANAGEMENT_DISABLE=1 STEAM_GAMESCOPE_HDR_SUPPORTED=0 DXVK_HDR=0

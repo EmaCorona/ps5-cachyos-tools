@@ -1,5 +1,5 @@
 diff --git src/Backends/DRMBackend.cpp src/Backends/DRMBackend.cpp
-index c9034b79..7111e775 100644
+index c9034b7..a6af122 100644
 --- src/Backends/DRMBackend.cpp
 +++ src/Backends/DRMBackend.cpp
 @@ -10,6 +10,7 @@
@@ -18,7 +18,34 @@ index c9034b79..7111e775 100644
  #include "backend.h"
  #include "color_helpers.h"
  #include "Utils/Defer.h"
-@@ -375,6 +377,7 @@ namespace gamescope
+@@ -177,6 +179,26 @@ struct drm_t g_DRM = {};
+ static std::thread g_page_flip_handler_thread;
+ static std::atomic<bool> g_page_flip_handler_thread_should_exit{false};
+ 
++// Opt-in, bounded diagnostics for first-scanout investigations. No per-frame
++// logging is emitted unless explicitly enabled by the session wrapper.
++static bool ps5_drm_diagnostics_enabled()
++{
++	static const bool enabled = []
++	{
++		const char *value = getenv( "PS5_GAMESCOPE_DRM_DIAGNOSTICS" );
++		return value && std::strcmp( value, "1" ) == 0;
++	}();
++	return enabled;
++}
++
++// Epoch 0 is initial scanout; epoch 1 is the first real seat resume.
++// Never reset counters: callbacks can arrive after the epoch changes.
++static std::atomic<uint32_t> g_ps5_drm_diagnostic_epoch{ 0 };
++static std::atomic<bool> g_ps5_drm_diagnostic_started{ false };
++static std::atomic<uint32_t> g_ps5_drm_diagnostic_commits[2]{};
++static std::atomic<uint32_t> g_ps5_drm_diagnostic_flips[2]{};
++static constexpr uint32_t k_ps5_drm_diagnostic_limit = 32;
++
+ static int g_page_flip_pipe_fds[2] = { -1, -1 };
+ 
+ namespace gamescope
+@@ -375,6 +397,7 @@ namespace gamescope
  		CDRMConnector( CDRMBackend *pBackend, drmModeConnector *pConnector );
  
  		void RefreshState();
@@ -26,15 +53,87 @@ index c9034b79..7111e775 100644
  
  		struct ConnectorProperties
  		{
-@@ -512,6 +515,7 @@ namespace gamescope
+@@ -512,6 +535,8 @@ namespace gamescope
  
  		CDRMBackend *m_pBackend = nullptr;
  		CAutoDeletePtr<drmModeConnector> m_pConnector;
 +		std::vector<drmModeModeInfo> m_EdidModes;
++		std::vector<drmModeModeInfo> m_CvtModes;
  
  		struct MutableConnectorState
  		{
-@@ -1380,7 +1384,7 @@ static bool setup_best_connector(struct drm_t *drm, bool force, bool initial)
+@@ -560,6 +585,8 @@ extern bool g_bDebugLayers;
+ struct DRMPresentCtx
+ {
+ 	uint64_t ulPendingFlipCount = 0;
++	uint32_t uDiagnosticCommitSequence = 0;
++	uint32_t uDiagnosticEpoch = 0;
+ };
+ 
+ extern gamescope::ConVar<bool> cv_composite_force;
+@@ -783,6 +810,61 @@ static void page_flip_handler(int fd, unsigned int frame, unsigned int sec, unsi
+ 	if ( g_DRM.pCRTC->GetObjectId() != crtc_id )
+ 		return;
+ 
++	if ( ps5_drm_diagnostics_enabled() )
++	{
++		const uint32_t diagnosticEpoch = pCtx->uDiagnosticEpoch;
++		const uint32_t flipSequence = g_ps5_drm_diagnostic_flips[diagnosticEpoch].fetch_add( 1, std::memory_order_relaxed ) + 1;
++		if ( flipSequence <= k_ps5_drm_diagnostic_limit )
++		{
++			drm_log.infof( "PS5_DRM_DIAG page_flip window=%u seq=%u commit_seq=%u monotonic_ns=%" PRIu64 " event_time=%u.%06u frame=%u crtc=%u pending_flip=%" PRIu64,
++				diagnosticEpoch, flipSequence, pCtx->uDiagnosticCommitSequence, get_time_in_nanos(), sec, usec, frame, crtc_id, pCtx->ulPendingFlipCount );
++			drmModeCrtc *scanoutCrtc = drmModeGetCrtc( fd, crtc_id );
++			if ( scanoutCrtc )
++			{
++				if ( scanoutCrtc->mode_valid )
++					drm_log.infof( "PS5_DRM_DIAG scanout flip_window=%u seq=%u commit_seq=%u crtc=%u fb=%u position=%u,%u mode=%dx%d@%d clock_khz=%u totals=%ux%u flags=0x%x",
++						diagnosticEpoch, flipSequence, pCtx->uDiagnosticCommitSequence, crtc_id, scanoutCrtc->buffer_id, scanoutCrtc->x, scanoutCrtc->y,
++						scanoutCrtc->mode.hdisplay, scanoutCrtc->mode.vdisplay, scanoutCrtc->mode.vrefresh,
++						scanoutCrtc->mode.clock, scanoutCrtc->mode.htotal, scanoutCrtc->mode.vtotal, scanoutCrtc->mode.flags );
++				else
++					drm_log.infof( "PS5_DRM_DIAG scanout flip_window=%u seq=%u commit_seq=%u crtc=%u mode=inactive", diagnosticEpoch, flipSequence, pCtx->uDiagnosticCommitSequence, crtc_id );
++				drmModeFreeCrtc( scanoutCrtc );
++			}
++			else
++				drm_log.infof( "PS5_DRM_DIAG scanout flip_window=%u seq=%u commit_seq=%u crtc=%u query_crtc_errno=%d", diagnosticEpoch, flipSequence, pCtx->uDiagnosticCommitSequence, crtc_id, errno );
++
++			if ( g_DRM.pPrimaryPlane )
++			{
++				drmModePlane *scanoutPlane = drmModeGetPlane( fd, g_DRM.pPrimaryPlane->GetObjectId() );
++				if ( scanoutPlane )
++				{
++					if ( scanoutPlane->fb_id )
++					{
++						drmModeFB2 *scanoutFb = drmModeGetFB2( fd, scanoutPlane->fb_id );
++						if ( scanoutFb )
++						{
++							drm_log.infof( "PS5_DRM_DIAG primary_plane flip_window=%u seq=%u commit_seq=%u plane=%u crtc=%u fb=%u size=%ux%u fourcc=0x%08x modifier=0x%016" PRIx64,
++								diagnosticEpoch, flipSequence, pCtx->uDiagnosticCommitSequence, scanoutPlane->plane_id, scanoutPlane->crtc_id, scanoutPlane->fb_id,
++								scanoutFb->width, scanoutFb->height, scanoutFb->pixel_format, scanoutFb->modifier );
++							drmModeFreeFB2( scanoutFb );
++						}
++						else
++							drm_log.infof( "PS5_DRM_DIAG primary_plane flip_window=%u seq=%u commit_seq=%u plane=%u crtc=%u fb=%u query_fb_errno=%d",
++								diagnosticEpoch, flipSequence, pCtx->uDiagnosticCommitSequence, scanoutPlane->plane_id, scanoutPlane->crtc_id, scanoutPlane->fb_id, errno );
++					}
++					else
++						drm_log.infof( "PS5_DRM_DIAG primary_plane flip_window=%u seq=%u commit_seq=%u plane=%u crtc=%u fb=0", diagnosticEpoch, flipSequence, pCtx->uDiagnosticCommitSequence, scanoutPlane->plane_id, scanoutPlane->crtc_id );
++					drmModeFreePlane( scanoutPlane );
++				}
++				else
++					drm_log.infof( "PS5_DRM_DIAG primary_plane flip_window=%u seq=%u commit_seq=%u plane=%u query_plane_errno=%d",
++						diagnosticEpoch, flipSequence, pCtx->uDiagnosticCommitSequence, g_DRM.pPrimaryPlane->GetObjectId(), errno );
++			}
++			else
++				drm_log.infof( "PS5_DRM_DIAG primary_plane flip_window=%u seq=%u commit_seq=%u status=unavailable", diagnosticEpoch, flipSequence, pCtx->uDiagnosticCommitSequence );
++		}
++	}
++
+ 	static uint64_t ulLastVBlankTime = 0;
+ 
+ 	// This is the last vblank time
+@@ -1380,7 +1462,7 @@ static bool setup_best_connector(struct drm_t *drm, bool force, bool initial)
  	const drmModeModeInfo *mode = nullptr;
  	if ( drm->preferred_width != 0 || drm->preferred_height != 0 || drm->preferred_refresh != 0 )
  	{
@@ -43,7 +142,7 @@ index c9034b79..7111e775 100644
  	}
  
  	if (!mode && best->GetScreenType() == gamescope::GAMESCOPE_SCREEN_TYPE_EXTERNAL) {
-@@ -1388,12 +1392,12 @@ static bool setup_best_connector(struct drm_t *drm, bool force, bool initial)
+@@ -1388,12 +1470,12 @@ static bool setup_best_connector(struct drm_t *drm, bool force, bool initial)
  		if (get_saved_mode(description, mode_info))
  		{
  			s_ExternalBroadcastRGBMode = mode_info.broadcast_mode;
@@ -58,7 +157,7 @@ index c9034b79..7111e775 100644
  	}
  
  	if (!mode) {
-@@ -2484,6 +2488,7 @@ namespace gamescope
+@@ -2484,6 +2566,7 @@ namespace gamescope
  			m_Props.Broadcast_RGB            = CDRMAtomicProperty::Instantiate( "Broadcast RGB",          this, *rawProperties );
  		}
  
@@ -66,7 +165,7 @@ index c9034b79..7111e775 100644
  		ParseEDID();
  
  		if ( m_Mutable.EdidData != oldEdid )
-@@ -2567,6 +2572,61 @@ namespace gamescope
+@@ -2567,6 +2650,61 @@ namespace gamescope
  
  		const di_edid *pEdid = di_info_get_edid( pInfo );
  
@@ -128,7 +227,7 @@ index c9034b79..7111e775 100644
  		const di_edid_vendor_product *pProduct = di_edid_get_vendor_product( pEdid );
  		m_Mutable.szMakePNP[0] = pProduct->manufacturer[0];
  		m_Mutable.szMakePNP[1] = pProduct->manufacturer[1];
-@@ -2838,6 +2898,53 @@ namespace gamescope
+@@ -2838,6 +2976,88 @@ namespace gamescope
  		}
  	}
  
@@ -138,6 +237,9 @@ index c9034b79..7111e775 100644
 +		const bool bPreferNativeEdidMode = hdisplay == 0 && vdisplay == 0 && vrefresh == 0;
 +		if ( ( mode && !bPreferNativeEdidMode ) || m_EdidModes.empty() )
 +			return mode;
++
++		m_CvtModes.clear();
++		m_CvtModes.reserve( m_EdidModes.size() );
 +
 +		const drmModeModeInfo *edidMode = gamescope::FindFirstUsableEDIDMode( m_EdidModes,
 +			[&]( const drmModeModeInfo &candidate ) -> const drmModeModeInfo *
@@ -153,19 +255,51 @@ index c9034b79..7111e775 100644
 +				if ( !g_DRM.pCRTC || !GetProperties().CRTC_ID || !g_DRM.pCRTC->GetProperties().ACTIVE || !g_DRM.pCRTC->GetProperties().MODE_ID )
 +					return nullptr;
 +
-+				uint32_t modeBlob = 0;
-+				if ( drmModeCreatePropertyBlob( g_DRM.fd, &candidate, sizeof( candidate ), &modeBlob ) != 0 )
-+					return nullptr;
-+				defer( drmModeDestroyPropertyBlob( g_DRM.fd, modeBlob ) );
-+				drmModeAtomicReq *request = drmModeAtomicAlloc();
-+				if ( !request )
-+					return nullptr;
-+				defer( drmModeAtomicFree( request ) );
-+				const auto &crtcProps = g_DRM.pCRTC->GetProperties();
-+				int ret = drmModeAtomicAddProperty( request, GetObjectId(), GetProperties().CRTC_ID->GetPropertyId(), g_DRM.pCRTC->GetObjectId() );
-+				ret |= drmModeAtomicAddProperty( request, g_DRM.pCRTC->GetObjectId(), crtcProps.ACTIVE->GetPropertyId(), 1 );
-+				ret |= drmModeAtomicAddProperty( request, g_DRM.pCRTC->GetObjectId(), crtcProps.MODE_ID->GetPropertyId(), modeBlob );
-+				if ( ret < 0 || drmModeAtomicCommit( g_DRM.fd, request, DRM_MODE_ATOMIC_TEST_ONLY | DRM_MODE_ATOMIC_ALLOW_MODESET, nullptr ) != 0 )
++				auto canModeset = [&]( const drmModeModeInfo &testMode )
++				{
++					uint32_t modeBlob = 0;
++					if ( drmModeCreatePropertyBlob( g_DRM.fd, &testMode, sizeof( testMode ), &modeBlob ) != 0 )
++						return false;
++					defer( drmModeDestroyPropertyBlob( g_DRM.fd, modeBlob ) );
++					drmModeAtomicReq *request = drmModeAtomicAlloc();
++					if ( !request )
++						return false;
++					defer( drmModeAtomicFree( request ) );
++					const auto &crtcProps = g_DRM.pCRTC->GetProperties();
++					int ret = drmModeAtomicAddProperty( request, GetObjectId(), GetProperties().CRTC_ID->GetPropertyId(), g_DRM.pCRTC->GetObjectId() );
++					ret |= drmModeAtomicAddProperty( request, g_DRM.pCRTC->GetObjectId(), crtcProps.ACTIVE->GetPropertyId(), 1 );
++					ret |= drmModeAtomicAddProperty( request, g_DRM.pCRTC->GetObjectId(), crtcProps.MODE_ID->GetPropertyId(), modeBlob );
++					return ret >= 0 && drmModeAtomicCommit( g_DRM.fd, request, DRM_MODE_ATOMIC_TEST_ONLY | DRM_MODE_ATOMIC_ALLOW_MODESET, nullptr ) == 0;
++				};
++
++				// On this platform a filtered EDID DTD can pass TEST_ONLY yet
++				// remain black at scanout.  CVT reduced blanking is the timing
++				// used by KWin for the same native size and refresh.  Prefer it
++				// only when totals match and the pixel clock differs by <= 1%.
++				drmModeModeInfo cvtMode{};
++				// Keep automatic EDID input inside modegen's safe integer and
++				// timing domain; other candidates still use their raw DTD.
++				if ( candidate.hdisplay > 0 && candidate.hdisplay <= 16384 && candidate.vdisplay > 0 && candidate.vdisplay <= 8640 &&
++					candidate.vrefresh >= 24 && candidate.vrefresh <= 500 )
++					generate_cvt_mode( &cvtMode, candidate.hdisplay, candidate.vdisplay, candidate.vrefresh, true, false );
++				const uint32_t clockDelta = cvtMode.clock > candidate.clock ? cvtMode.clock - candidate.clock : candidate.clock - cvtMode.clock;
++				if ( cvtMode.hdisplay == candidate.hdisplay && cvtMode.vdisplay == candidate.vdisplay &&
++					cvtMode.htotal == candidate.htotal && cvtMode.vtotal == candidate.vtotal &&
++					(uint64_t)clockDelta * 100 <= candidate.clock )
++				{
++					cvtMode.vrefresh = candidate.vrefresh;
++					cvtMode.type = DRM_MODE_TYPE_DRIVER;
++					m_CvtModes.push_back( cvtMode );
++					if ( canModeset( m_CvtModes.back() ) )
++					{
++						drm_log.infof( "EDID CVT-RB mode candidate %dx%d@%u passed atomic TEST_ONLY",
++							candidate.hdisplay, candidate.vdisplay, candidate.vrefresh );
++						return &m_CvtModes.back();
++					}
++					m_CvtModes.pop_back();
++				}
++
++				if ( !canModeset( candidate ) )
 +				{
 +					drm_log.warnf( "EDID mode candidate %dx%d@%u failed atomic TEST_ONLY; trying the next candidate",
 +						candidate.hdisplay, candidate.vdisplay, candidate.vrefresh );
@@ -182,3 +316,67 @@ index c9034b79..7111e775 100644
  	/////////////////////////
  	// CDRMFb
  	/////////////////////////
+@@ -4183,10 +4403,19 @@ namespace gamescope
+ 
+ 		virtual void DirtyState( bool bForce, bool bForceModeset ) override
+ 		{
++			const bool wasPaused = g_DRM.paused;
++			const bool sessionActive = wlsession_active();
++			if ( ps5_drm_diagnostics_enabled() && bForceModeset && wasPaused && sessionActive &&
++				g_ps5_drm_diagnostic_started.load( std::memory_order_acquire ) )
++			{
++				uint32_t expected = 0;
++				if ( g_ps5_drm_diagnostic_epoch.compare_exchange_strong( expected, 1, std::memory_order_acq_rel ) )
++					drm_log.infof( "PS5_DRM_DIAG window_resume monotonic_ns=%" PRIu64, get_time_in_nanos() );
++			}
+ 			if ( bForceModeset )
+ 				g_DRM.needs_modeset = true;
+ 			g_DRM.out_of_date = std::max<int>( g_DRM.out_of_date, bForce ? 2 : 1 );
+-			g_DRM.paused = !wlsession_active();
++			g_DRM.paused = !sessionActive;
+ 		}
+ 
+ 		virtual bool PollState() override
+@@ -4383,11 +4612,42 @@ namespace gamescope
+ 			uint32_t uCurrentPresentCtx = m_uNextPresentCtx;
+ 			m_uNextPresentCtx = ( m_uNextPresentCtx + 1 ) % 3;
+ 			m_PresentCtxs[uCurrentPresentCtx].ulPendingFlipCount = g_DRM.pConnector->PresentationFeedback().m_uQueuedPresents;
++			m_PresentCtxs[uCurrentPresentCtx].uDiagnosticCommitSequence = 0;
++			m_PresentCtxs[uCurrentPresentCtx].uDiagnosticEpoch = 0;
+ 
+ 			drm_log.debugf("flip commit %" PRIu64, (uint64_t)g_DRM.pConnector->PresentationFeedback().m_uQueuedPresents);
+ 			gpuvis_trace_printf( "flip commit %" PRIu64, (uint64_t)g_DRM.pConnector->PresentationFeedback().m_uQueuedPresents );
+ 
++			uint32_t diagnosticSequence = 0;
++			uint32_t diagnosticEpoch = 0;
++			if ( ps5_drm_diagnostics_enabled() )
++			{
++				diagnosticEpoch = g_ps5_drm_diagnostic_epoch.load( std::memory_order_acquire );
++				g_ps5_drm_diagnostic_started.store( true, std::memory_order_release );
++				diagnosticSequence = g_ps5_drm_diagnostic_commits[diagnosticEpoch].fetch_add( 1, std::memory_order_relaxed ) + 1;
++				if ( diagnosticSequence <= k_ps5_drm_diagnostic_limit )
++				{
++					const drmModeModeInfo *mode = drm->pending.mode_id ? &drm->pending.mode_id->View<drmModeModeInfo>() : nullptr;
++					if ( mode )
++						drm_log.infof( "PS5_DRM_DIAG commit_begin window=%u seq=%u monotonic_ns=%" PRIu64 " connector=%s crtc=%u mode=%dx%d@%u clock_khz=%u totals=%ux%u sync=%u/%u,%u/%u flags=0x%x commit_flags=0x%x primary_format=0x%08x",
++							diagnosticEpoch, diagnosticSequence, get_time_in_nanos(), drm->pConnector ? drm->pConnector->GetName() : "none",
++							drm->pCRTC ? drm->pCRTC->GetObjectId() : 0, mode->hdisplay, mode->vdisplay, mode->vrefresh,
++							mode->clock, mode->htotal, mode->vtotal, mode->hsync_start, mode->hsync_end,
++							mode->vsync_start, mode->vsync_end, mode->flags, drm->flags, g_nDRMFormat );
++					else
++						drm_log.infof( "PS5_DRM_DIAG commit_begin window=%u seq=%u monotonic_ns=%" PRIu64 " connector=%s crtc=%u mode=none commit_flags=0x%x primary_format=0x%08x",
++							diagnosticEpoch, diagnosticSequence, get_time_in_nanos(), drm->pConnector ? drm->pConnector->GetName() : "none",
++							drm->pCRTC ? drm->pCRTC->GetObjectId() : 0, drm->flags, g_nDRMFormat );
++				}
++			}
++			m_PresentCtxs[uCurrentPresentCtx].uDiagnosticCommitSequence = diagnosticSequence <= k_ps5_drm_diagnostic_limit ? diagnosticSequence : 0;
++			m_PresentCtxs[uCurrentPresentCtx].uDiagnosticEpoch = diagnosticEpoch;
++
+ 			ret = drmModeAtomicCommit(drm->fd, drm->req, drm->flags, &m_PresentCtxs[uCurrentPresentCtx] );
++			const int commitErrno = ret == 0 ? 0 : errno;
++			if ( diagnosticSequence > 0 && diagnosticSequence <= k_ps5_drm_diagnostic_limit )
++				drm_log.infof( "PS5_DRM_DIAG commit_end window=%u seq=%u monotonic_ns=%" PRIu64 " ret=%d errno=%d page_flip=%d pending_flip=%u",
++					diagnosticEpoch, diagnosticSequence, get_time_in_nanos(), ret, commitErrno, isPageFlip, drm->uPendingFlipCount.load( std::memory_order_relaxed ) );
+ 			if ( ret != 0 )
+ 			{
+ 				drm_log.errorf_errno( "flip error" );

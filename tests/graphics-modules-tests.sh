@@ -79,6 +79,13 @@ if grep -Fq 'KWIN_FORCE_SW_CURSOR=${KWIN_FORCE_SW_CURSOR:-0}' "$root/etc/profile
     ok 'KWin mantiene default 0 e override software cursor 1 solo in KDE'
 else no 'default/override KWIN_FORCE_SW_CURSOR o isolamento sessione incompleto'; fi
 
+if grep -Fq 'KWIN_FORCE_SW_CURSOR=${KWIN_FORCE_SW_CURSOR:-0}' "$root/etc/profile.d/ps5-kde-environment.sh" && \
+   grep -q 'KWIN_FORCE_SW_CURSOR' "$root/usr/local/libexec/ps5-cachyos-tools/session-supervisor" && \
+   env -u KWIN_FORCE_SW_CURSOR bash -c 'source "$1"; [[ $KWIN_FORCE_SW_CURSOR == 0 ]]' _ "$ROOT/modules/kde/files/ps5-kde-environment.sh" && \
+   env KWIN_FORCE_SW_CURSOR=1 bash -c 'source "$1"; [[ $KWIN_FORCE_SW_CURSOR == 1 ]]' _ "$ROOT/modules/kde/files/ps5-kde-environment.sh"; then
+    ok 'KWin software cursor opt-in mantiene default 0 e override 1 propagabile solo alla sessione KDE'
+else no 'configurazione/propagazione KWIN_FORCE_SW_CURSOR incompleta'; fi
+
 # A module revision change must refresh the helper assets of installed dependencies.
 sed -i 's/^REVISION=3$/REVISION=1/' "$root/usr/lib/ps5-cachyos-tools/modules/gamescope/module.conf"
 sed -i 's/^REVISION=3$/REVISION=1/' "$root/usr/lib/ps5-cachyos-tools/modules/kde/module.conf"
@@ -281,8 +288,7 @@ grep -q 'systemctl --user unset-environment .*KWIN_FORCE_SW_CURSOR' "$live/comma
 printf '24|1|0|1\nunset|unset|unset|unset\n24|1|0|1\n' > "$live/env-trace.expected"
 cmp -s "$live/env-trace.expected" "$live/env-trace" || live_ok=0
 grep -q 'unità KDE opzionale assente, ignorata: xdg-desktop-portal-kde.service' "$live/home/session.log" 2>/dev/null || live_ok=0
-portal_stop_count=$(grep -c 'systemctl --user stop .*xdg-desktop-portal-kde.service' "$live/commands" 2>/dev/null || true)
-[[ $portal_stop_count == 2 ]] || live_ok=0
+! grep -q 'systemctl --user stop xdg-desktop-portal-kde.service' "$live/commands" 2>/dev/null || live_ok=0
 kill -TERM "$live_pid" 2>/dev/null || true
 wait "$live_pid" 2>/dev/null || true
 if (( live_ok )); then ok 'supervisore consente KDE→Gamescope→KDE senza cambiare policy o session.conf'; else cat "$live/home/supervisor.out" "$live/home/session.log" "$live/trace" >&2 2>/dev/null; no 'transizione live KDE/Gamescope'; fi
@@ -576,6 +582,7 @@ EOF
 cat > "$tmp/mockbin/gamescope" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "$PS5_GAMESCOPE_ARGS"
+if [[ -n ${PS5_GAMESCOPE_DIAG_STATE:-} ]]; then printf '%s\n' "${PS5_GAMESCOPE_DRM_DIAGNOSTICS:-unset}" > "$PS5_GAMESCOPE_DIAG_STATE"; fi
 while [[ $# -gt 0 && $1 != -- ]]; do shift; done
 [[ $# -gt 0 ]] || exit 99
 shift
@@ -585,12 +592,32 @@ chmod 0755 "$tmp/mockbin/steam" "$tmp/mockbin/gamescope"
 printf 'PS5_OUTPUT_WIDTH=1280\nPS5_OUTPUT_HEIGHT=720\nPS5_REFRESH_RATE=60\n' > "$tmp/gamescope.conf"
 if HOME="$wrapper_home" PS5_STEAM_DIR="$wrapper_home/steam" PS5_GAMESCOPE_LOG="$tmp/wrapper.log" \
    PS5_GAMESCOPE_CONFIG="$tmp/gamescope.conf" PS5_DRM_SYSFS_ROOT="$drm_root" PS5_DRM_DEVICE="$tmp/card0" \
-   PS5_STEAM_EXEC="$tmp/mockbin/steam" PS5_GAMESCOPE_EXEC="$tmp/mockbin/gamescope" PS5_STEAM_ARGS="$tmp/steam-args" PS5_GAMESCOPE_ARGS="$tmp/gs-args" \
+   PS5_STEAM_EXEC="$tmp/mockbin/steam" PS5_GAMESCOPE_EXEC="$tmp/mockbin/gamescope" PS5_STEAM_ARGS="$tmp/steam-args" PS5_GAMESCOPE_ARGS="$tmp/gs-args" PS5_GAMESCOPE_DIAG_STATE="$tmp/diag-default" \
    "$ROOT/modules/gamescope/files/gamescope-session-ps5" >/dev/null 2>&1 && \
    grep -qx -- '-W' "$tmp/gs-args" && grep -qx '1280' "$tmp/gs-args" && grep -qx -- '-H' "$tmp/gs-args" && grep -qx '720' "$tmp/gs-args" && \
-   grep -qx -- '-gamepadui -steamos' "$tmp/steam-args"; then
+   grep -qx -- '-gamepadui -steamos' "$tmp/steam-args" && grep -qx 'unset' "$tmp/diag-default"; then
     ok 'wrapper Gamescope rileva DRM e costruisce gli argomenti con override validato'
 else no 'wrapper Gamescope non applica override/DRM'; fi
+
+printf 'PS5_DRM_DIAGNOSTICS=1\n' > "$tmp/diagnostic-gamescope.conf"
+if HOME="$wrapper_home" PS5_STEAM_DIR="$wrapper_home/steam" PS5_GAMESCOPE_LOG="$tmp/diagnostic-wrapper.log" \
+   PS5_GAMESCOPE_CONFIG="$tmp/diagnostic-gamescope.conf" PS5_DRM_SYSFS_ROOT="$drm_root" PS5_DRM_DEVICE="$tmp/card0" \
+   PS5_STEAM_EXEC="$tmp/mockbin/steam" PS5_GAMESCOPE_EXEC="$tmp/mockbin/gamescope" PS5_STEAM_ARGS="$tmp/steam-args" \
+   PS5_GAMESCOPE_ARGS="$tmp/diagnostic-gs-args" PS5_GAMESCOPE_DIAG_STATE="$tmp/diag-enabled" \
+   "$ROOT/modules/gamescope/files/gamescope-session-ps5" >/dev/null 2>&1 && \
+   grep -qx '1' "$tmp/diag-enabled" && grep -q 'milestone=drm_diagnostics_enabled scope=first-32-commits-and-page-flips' "$tmp/diagnostic-wrapper.log"; then
+    ok 'diagnostica DRM Gamescope opt-in esportata solo quando richiesta dalla config'
+else no 'diagnostica DRM Gamescope non è opt-in o non viene propagata'; fi
+
+printf 'PS5_DRM_DIAGNOSTICS=2\n' > "$tmp/invalid-diagnostic-gamescope.conf"
+if HOME="$wrapper_home" PS5_STEAM_DIR="$wrapper_home/steam" PS5_GAMESCOPE_LOG="$tmp/invalid-diagnostic-wrapper.log" \
+   PS5_GAMESCOPE_CONFIG="$tmp/invalid-diagnostic-gamescope.conf" PS5_DRM_DEVICE="$tmp/card0" \
+   PS5_STEAM_EXEC="$tmp/mockbin/steam" PS5_GAMESCOPE_EXEC="$tmp/mockbin/gamescope" \
+   "$ROOT/modules/gamescope/files/gamescope-session-ps5" >/dev/null 2>&1; then
+    no 'valore non booleano diagnostica DRM accettato'
+else
+    ok 'valore non booleano diagnostica DRM rifiutato prima dell’avvio';
+fi
 
 cat > "$tmp/fake-gamescope-mode-detector" <<'EOF'
 #!/usr/bin/env bash
