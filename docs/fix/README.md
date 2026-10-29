@@ -1,5 +1,9 @@
 # Registro fix
 
+- 2026-10-29 — [riuso della dipendenza Gamescope già valida](fix-reused-gamescope-dependency-posthook.md): `session` evita la ricompilazione del pacchetto e salta i post-hook della dipendenza non modificata.
+
+- 2026-10-29 — [selezione ripetuta dei moduli nella migrazione 7.2.3](fix-kernel-7.2.3-selective-cli.md): la CLI rifiuta più opzioni `--module` anziché applicare silenziosamente solo l'ultima.
+
 - 2026-10-29 — [`baa7e8cfe6cb`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/baa7e8cfe6cbca75422d6883fccf4c19391a9634): [default VRAM 512 MiB e configurazioni persistenti](fix-baa7e8cfe6cb-vram-default-persistence.md), conflitti root/FAT fail-closed, rimozione keep/purge coerente e runbook AMDGPU; probe Vulkan conferma 640 MiB residenti in GTT con carveout da 512 MiB. Una partita Proton Experimental precedente al run ridotto ha avuto un OOM globale che l’utente attribuisce al carico eccessivo; il run ridotto seguente termina normalmente. Il runtime Gamescope usa il pacchetto 3.17.0-4 con fingerprint del patch corrispondente al branch.
 
 - 2026-10-29 — [`46dcb0011a7e`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/46dcb0011a7ec6e6913e19f8dbcb69a46b690eca): [override diagnostico reversibile KWin](fix-46dcb0011a7e-kde-amdgpu-ra24-software-cursor.md) per errori AMDGPU RA24; A/B hardware 16:9 ancora da eseguire.

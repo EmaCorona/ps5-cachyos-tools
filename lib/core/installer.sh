@@ -176,6 +176,7 @@ core_install_body() {
         fi
         if [ -n "$module" ] && [ "$id" != "$module" ] && core_install_module_valid "$root" "$repo" "$id"; then
             core_log "dipendenza già valida: $id"
+            CORE_INSTALL_REUSED_MODULES+=("$id")
             continue
         fi
         mkdir -p "$root/usr/lib/ps5-cachyos-tools/modules/$id" || return 1
@@ -358,7 +359,11 @@ core_install_preflight() {
             enabled=$(core_registry_field "$id" 1)
             install_disabled=$(core_registry_field "$id" 12)
             if [ "$enabled" = true ] || { [ -n "$module" ] && [ "$install_disabled" = true ]; }; then
-                CORE_REPO="$repo" CORE_INSTALL_MODE="${CORE_INSTALL_MODE:-offline}" CORE_TARGET_ROOT="$root" CORE_MODULE_ID="$id" CORE_FRAMEWORK_MANAGED=1 CORE_DRY_RUN=1 "$moddir/$post_install_hook" "$root" preflight || return $?
+                if [ -n "$module" ] && [ "$id" != "$module" ] && core_install_module_valid "$root" "$repo" "$id"; then
+                    core_log "preflight post-hook saltato: dipendenza già valida $id"
+                else
+                    CORE_REPO="$repo" CORE_INSTALL_MODE="${CORE_INSTALL_MODE:-offline}" CORE_TARGET_ROOT="$root" CORE_MODULE_ID="$id" CORE_FRAMEWORK_MANAGED=1 CORE_DRY_RUN=1 "$moddir/$post_install_hook" "$root" preflight || return $?
+                fi
             fi
         fi
         post_remove_hook=$(core_registry_field "$id" 17)
@@ -369,11 +374,14 @@ core_install_preflight() {
 }
 
 core_install_post_hooks() {
-    local root=$1 repo=$2 module=${3-} action=${4:-install} order id hook enabled install_disabled copied
+    local root=$1 repo=$2 module=${3-} action=${4:-install} order id hook enabled install_disabled copied reused
     order=$(core_registry_selection_order "$module") || return 1
     [ "$action" != rollback ] || order=$(tac <<< "$order")
     while IFS= read -r id; do
         [ -n "$id" ] || continue
+        for reused in "${CORE_INSTALL_REUSED_MODULES[@]}"; do
+            [ "$id" != "$reused" ] || continue 2
+        done
         hook=$(core_registry_field "$id" 16)
         [ -n "$hook" ] || continue
         enabled=$(core_registry_field "$id" 1)
@@ -403,6 +411,7 @@ core_install() {
     core_txn_snapshot "$root" "$backup" "$2" "${3-}" || { core_log 'snapshot transazione fallito'; rm -rf -- "$backup"; return 1; }
     core_service_transaction_snapshot "$root" "${3-}" "$backup" || { core_log 'snapshot servizi fallito'; rm -rf -- "$backup"; return 1; }
     CORE_INSTALL_TRANSACTION_BACKUP="$backup"
+    CORE_INSTALL_REUSED_MODULES=()
     if core_install_body "$@" && core_install_post_hooks "$@" install && core_install_post_hooks "$@" commit; then
         if ! core_install_post_hooks "$@" finalize; then
             core_log "installazione applicata ma finalizzazione hook fallita; backup conservato in $backup"

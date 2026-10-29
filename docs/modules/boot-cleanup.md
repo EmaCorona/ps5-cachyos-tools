@@ -17,3 +17,6 @@ Il modulo installa anche `recover.sh`, un helper manuale per `/tmp/dumps`. Non v
 ```
 
 L'helper verifica `steam` e `steamwebhelper` con `pgrep`; se uno dei due è attivo non modifica nulla. Se non riesce a verificare i processi, si ferma senza modifiche. A Steam fermo, crea `/tmp/dumps` con modalità `700` se manca oppure, solo se la directory è posseduta da Steam e ha una modalità diversa da `700`/`1700`, la normalizza a `700`. Rifiuta symlink, percorsi non-directory e proprietari inattesi. Non cancella né sposta i dump o i log; la presenza di `.crash` non è usata come prova sufficiente di un guasto.
+# Verifica sul kernel 7.2.3 (29 ottobre 2026)
+
+Sulla PS5 in esecuzione, `ps5-tools-early.service` ha terminato con `status=0/SUCCESS`. Due `reapply boot-cleanup --live` hanno prodotto `action=NO_ACTION`, `removed=0` e `check --live` riuscito. Rimozione e reinstallazione hanno conservato l'hash della configurazione. Non erano presenti artefatti obsoleti eliminabili; l'esecuzione in un nuovo boot non è stata verificata. Il report completo è in [`docs/e2e`](../e2e/2026-10-29-kernel-7.2.3-migration.md).

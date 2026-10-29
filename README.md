@@ -60,7 +60,24 @@ sudo ./bin/ps5-cachyos-tools install --live --boot /boot/efi --dry-run
 sudo ./bin/ps5-cachyos-tools install --live --boot /boot/efi
 ```
 
-The live installer requires administrative privileges and PS5 platform detection. It enables and starts the fan service after successful installation. `boot-cleanup` runs through `ps5-tools-early.service` at a subsequent boot, or can be invoked with `reapply`. KDE, Gamescope, and session tasks validate their artifacts at normal boot; a login shell on TTY1 starts the session supervisor, which launches KDE by default, accepts temporary switches to Gamescope, and falls back to KDE if Gamescope fails. The framework does not install KDE/Gamescope packages or update Steam. The VRAM module writes the selected byte count in hexadecimal to `vram.txt`; when both root and FAT configuration files are absent, a new installation defaults to 512 MiB. Existing valid values are preserved; malformed or conflicting values fail closed unless explicitly resolved. The loader reads that file during a later Linux boot.
+The live installer requires administrative privileges and PS5 platform detection. It enables and starts the fan service after successful installation. `boot-cleanup` runs through `ps5-tools-early.service` at a subsequent boot, or can be invoked with `reapply`. KDE, Gamescope, and session tasks validate their artifacts at normal boot; a login shell on TTY1 starts the session supervisor, which launches KDE by default, accepts temporary switches to Gamescope, and falls back to KDE if Gamescope fails. The KDE module does not install Plasma packages; the Gamescope module builds a separate patched package and keeps the distribution's `/usr/bin/gamescope` intact. The framework does not update Steam. The VRAM module writes the selected byte count in hexadecimal to `vram.txt`; when both root and FAT configuration files are absent, a new installation defaults to 512 MiB. Existing valid values are preserved; malformed or conflicting values fail closed unless explicitly resolved. The loader reads that file during a later Linux boot.
+
+### Selective migration on PS5 Linux kernel 7.2.3
+
+To migrate without installing the `fan` module, select one module per command. `session` resolves its `kde` and `gamescope` dependencies. Use the loader's verified FAT32 mount in place of `/boot/efi` if it differs.
+
+```bash
+findmnt /boot/efi
+uname -r
+for module in boot-cleanup kde gamescope session vram; do
+  sudo ./bin/ps5-cachyos-tools install --live --boot /boot/efi --module "$module" --dry-run || exit
+done
+for module in boot-cleanup kde gamescope session vram; do
+  sudo ./bin/ps5-cachyos-tools install --live --boot /boot/efi --module "$module" || exit
+done
+```
+
+Repeated `--module` options in one invocation are rejected; each selected module is a separate transaction. Confirm display and session behavior on the connected console after installation.
 
 ### Install selected modules or set VRAM explicitly
 

@@ -35,3 +35,6 @@ tail -n 100 /home/steam/.gamescope-fallback.log
 ```
 
 I test mock verificano che `DEFAULT_SESSION` e `NEXT_SESSION` non prevalgano sulla policy e coprono il cambio live KDE→Gamescope→KDE, il rifiuto senza supervisore, la presenza di KWin, l'assenza di unità portal opzionali, la conservazione degli override KWin e i fallback. La conferma di Plasma/Gamescope, DRM, HDMI e comportamento al reboot richiede una prova sul sistema PS5; i test mock non dimostrano il boot hardware.
+# Verifica sul kernel 7.2.3 (29 ottobre 2026)
+
+La policy installata restituisce `desktop`; il boot hook, `reapply` e `check --live` passano. Rimozione e reinstallazione ripristinano e conservano gli originali dello script TTY e del selettore. Il supervisore non è ancora in esecuzione nella sessione aperta prima dell'installazione: switch, fallback reale, timeout e primo avvio Steam sono non verificati. Si veda il [report E2E](../e2e/2026-10-29-kernel-7.2.3-migration.md).

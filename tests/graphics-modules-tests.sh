@@ -20,8 +20,9 @@ cat > "$mock_package" <<'EOF'
 #!/usr/bin/env bash
 set -eu
 root=$2
+printf '%s\n' "$1" >> "${MOCK_PACKAGE_LOG:-/dev/null}"
 case "$1" in
-  preflight) exit 0 ;;
+  preflight) exit "${MOCK_FAIL_PREFLIGHT:-0}" ;;
   install)
     mkdir -p "$root/usr/lib/ps5-cachyos-tools/gamescope/bin" "$root/usr/lib/ps5-cachyos-tools/gamescope/share/gamescope/scripts" "$root/usr/share/ps5-cachyos-tools/gamescope" "$root/var/lib/ps5-cachyos-tools/gamescope/packages"
     printf '#!/bin/sh\nexit 0\n' > "$root/usr/lib/ps5-cachyos-tools/gamescope/bin/gamescope"
@@ -43,7 +44,7 @@ case "$*" in
 esac
 EOF
 chmod 0755 "$mock_package" "$mock_pacman"
-export PS5_GAMESCOPE_PACKAGE_HELPER="$mock_package" PS5_GAMESCOPE_PACMAN="$mock_pacman"
+export PS5_GAMESCOPE_PACKAGE_HELPER="$mock_package" PS5_GAMESCOPE_PACMAN="$mock_pacman" MOCK_PACKAGE_LOG="$tmp/package-operations.log"
 export XDG_SESSION_ID=1
 
 fixture() {
@@ -58,10 +59,35 @@ fixture() {
 
 root="$tmp/root"
 fixture "$root"
+if "$CLI" install --root "$root" --module kde --module gamescope --dry-run > "$tmp/duplicate-module.log" 2>&1; then
+    no 'CLI rifiuta selezioni --module multiple anziché installare solo l’ultima'
+elif grep -Fq -- '--module può essere specificato una sola volta' "$tmp/duplicate-module.log" && \
+     [ ! -e "$root/usr/lib/ps5-cachyos-tools" ]; then
+    ok 'CLI rifiuta selezioni --module multiple senza modificare il target'
+else
+    no 'CLI rifiuta selezioni --module multiple con errore esplicito'
+fi
 printf 'old profile\n' > "$root/etc/profile.d/ps5-tty-session.sh"
 printf 'old selector\n' > "$root/usr/bin/steamos-session-select"
 printf '[preferred]\ndefault=kde\n' > "$root/usr/share/xdg-desktop-portal/gamescope-portals.conf"
 if "$CLI" install --root "$root" --module session > "$tmp/install.log" 2>&1; then ok 'installazione Session seleziona KDE e Gamescope come dipendenze'; else cat "$tmp/install.log" >&2; no 'installazione grafica selettiva'; fi
+if grep -qx install "$MOCK_PACKAGE_LOG"; then ok 'prima installazione esegue il post-hook Gamescope'; else no 'prima installazione non esegue il post-hook Gamescope'; fi
+: > "$MOCK_PACKAGE_LOG"
+if "$CLI" install --root "$root" --module session > "$tmp/reinstall-session.log" 2>&1 && \
+   ! grep -Eq '^(install|commit|finalize|rollback)$' "$MOCK_PACKAGE_LOG"; then
+    ok 'reinstallazione Session riusa Gamescope valido senza ricostruirne il pacchetto'
+else
+    cat "$tmp/reinstall-session.log" >&2
+    no 'reinstallazione Session ha rieseguito il post-hook Gamescope'
+fi
+: > "$MOCK_PACKAGE_LOG"
+if MOCK_FAIL_PREFLIGHT=71 "$CLI" install --root "$root" --module session > "$tmp/reinstall-no-build-tools.log" 2>&1 && \
+   [ ! -s "$MOCK_PACKAGE_LOG" ]; then
+    ok 'dipendenza Gamescope valida non richiede preflight del pacchetto'
+else
+    cat "$tmp/reinstall-no-build-tools.log" >&2
+    no 'preflight della dipendenza Gamescope valida ha bloccato Session'
+fi
 if grep -qx 'desktop' <(sed -n 's/^DEFAULT_SESSION=//p' "$root/home/steam/.config/ps5-cachyos-tools/session.conf") && \
    [ ! -e "$root/usr/lib/ps5-cachyos-tools/modules/fan/module.conf" ] && [ ! -e "$root/usr/lib/ps5-cachyos-tools/modules/boot-cleanup/module.conf" ]; then
     ok 'prima installazione imposta KDE e non tocca gli altri moduli'

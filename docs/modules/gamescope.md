@@ -26,7 +26,7 @@ Il modulo non assegna capability al binario `gamescope` né installa un servizio
 
 ## Lifecycle e diagnosi
 
-Manifest, `install.sh`, `check.sh`, `boot.sh` e `remove.sh` sono gestiti dal framework. La configurazione viene preservata da reinstallazione e rimozione predefinita; `--purge-config` la elimina. La rimozione disinstalla soltanto `ps5-cachyos-gamescope`; lascia il pacchetto Gamescope ufficiale, Steam e i dati Steam intatti. Mantiene l’archivio downstream in cache sotto `/var/lib/ps5-cachyos-tools/gamescope/packages` per poter compensare un rollback della rimozione.
+Manifest, `install.sh`, `check.sh`, `boot.sh` e `remove.sh` sono gestiti dal framework. La configurazione viene preservata da reinstallazione e rimozione predefinita; `--purge-config` la elimina. Quando `gamescope` è una dipendenza già valida di `session`, l'installazione selettiva di `session` riusa il modulo senza rieseguire il preflight esterno né gli hook di build, commit, finalize o rollback del pacchetto. Una reinstallazione esplicita di `gamescope` mantiene invece il suo normale lifecycle. La rimozione disinstalla soltanto `ps5-cachyos-gamescope`; lascia il pacchetto Gamescope ufficiale, Steam e i dati Steam intatti. Mantiene l’archivio downstream in cache sotto `/var/lib/ps5-cachyos-tools/gamescope/packages` per poter compensare un rollback della rimozione.
 
 ```bash
 /usr/local/bin/ps5-cachyos-tools-video-diag
@@ -36,3 +36,6 @@ tail -n 100 /home/steam/.gamescope.log
 ```
 
 I test automatici simulano sysfs, modalità preferred, rapporti d'aspetto, validazione config e codici di errore. Non verificano acquisizione reale del master DRM, eventi fisici hotplug, modeset, colori, handshake del collegamento, performance o disponibilità delle opzioni Gamescope della build installata: questi aspetti richiedono PS5 e display reali.
+# Verifica sul kernel 7.2.3 (29 ottobre 2026)
+
+Il pacchetto privato `ps5-cachyos-gamescope 3.17.0-4` è stato costruito, installato e verificato; il binario è partito in backend headless su questa PS5. Il detector legge `2560x1440@60` sul connettore `DP-1`. Il backend DRM live, la visibilità HDMI, lo Steam gamepad UI e l'overlay FPS non sono stati provati perché la sessione KDE corrente precede il supervisore e manca un recupero esterno validato. Si veda il [report E2E](../e2e/2026-10-29-kernel-7.2.3-migration.md).

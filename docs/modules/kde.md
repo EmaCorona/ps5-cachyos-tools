@@ -26,3 +26,6 @@ cat /etc/profile.d/ps5-kde-environment.sh
 ```
 
 I test automatici verificano il parsing EDID, il fallback alle modalità KScreen, l'applicazione/rollback simulati e l'installazione/rimozione su rootfs fixture. La scelta effettiva della modalità e l'handshake EDID richiedono verifica su PS5 con monitor/TV collegato.
+# Verifica sul kernel 7.2.3 (29 ottobre 2026)
+
+La PS5 espone `DP-1` connesso e la sessione corrente ha `kwin_wayland` e `plasmashell` attivi; KScreen indica l'output abilitato. Il boot hook KDE e `check --live` sono riusciti. La sessione corrente precede l'installazione del supervisore, quindi il nuovo avvio automatico in KDE e il segnale HDMI dopo uno switch restano da verificare. Dettagli nel [report E2E](../e2e/2026-10-29-kernel-7.2.3-migration.md).
