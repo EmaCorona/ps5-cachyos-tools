@@ -6,7 +6,7 @@
 
 pkgname=ps5-cachyos-gamescope
 pkgver=3.17.0
-pkgrel=1
+pkgrel=4
 pkgdesc='PS5 CachyOS Gamescope build with dynamic EDID mode selection'
 arch=(x86_64)
 url=https://github.com/ValveSoftware/gamescope
@@ -49,7 +49,7 @@ b2sums=('e5f8ca675d1c0fb5f60cf864d4511db82ca1103a3ed9a51b8ea26bcf07055f04ad22ff0
         'SKIP'
         'SKIP'
         'SKIP'
-        '75bfb17ca3cac3ee8e08ed9d1b29923185e83cdf670ca6b017675e496ea2d2f023bf6888fd399480208b6e48625adcb8d97b66be2abd16b795a96687bac4a2e2'
+        '0d036faabdc615f0d3cb3fc6d272c808762e8b0e5ba098558ab0e58e3029a1c11879ace64eb6589b2f807e70c6f6316b3f7848d72161f74cbb081031161b177b'
         '938fc74af834995d324cafaedab96ce1a21b203a1eadaa554e151bc3a60e1b33e539baf525c76484b6c994b7f5566305a51630b66cdbe72721141be723846a6e')
 
 prepare() {

@@ -40,6 +40,7 @@ if [ ! -e "$config" ]; then
 # PS5_NESTED_HEIGHT=1080
 # PS5_REFRESH_RATE=60
 # PS5_OUTPUT_CONN=DP-1
+# PS5_DRM_DIAGNOSTICS=1
 EOF
     chmod 0644 "$tmp" && mv -f -- "$tmp" "$config" || { rm -f -- "$tmp"; exit 1; }
 fi
