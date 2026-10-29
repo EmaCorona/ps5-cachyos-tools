@@ -1,5 +1,7 @@
 # Selezione ripetuta dei moduli durante la migrazione 7.2.3
 
+Fonte primaria: [commit `ea9738987eb2`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/ea9738987eb20594c59f5f258cc5b0dd5d86f48e), 29 ottobre 2026.
+
 ## Problema
 
 La CLI accettava più opzioni `--module` nella stessa invocazione, ma conservava soltanto l'ultima. Un dry run che elencava cinque moduli poteva quindi mostrare un piano per il solo ultimo modulo, creando un falso senso di completezza nella migrazione selettiva che esclude `fan`.

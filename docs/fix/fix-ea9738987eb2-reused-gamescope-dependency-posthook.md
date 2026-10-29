@@ -1,5 +1,7 @@
 # Rebuild Gamescope non necessaria durante l'installazione di Session
 
+Fonte primaria: [commit `ea9738987eb2`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/ea9738987eb20594c59f5f258cc5b0dd5d86f48e), 29 ottobre 2026.
+
 ## Problema
 
 Su PS5 con kernel 7.2.3, l'installazione selettiva di `session` riconosceva `gamescope` già valido e ne saltava la copia, ma eseguiva comunque il post-hook del pacchetto. Questo scaricava e ricompilava Gamescope 3.17.0, pur non richiedendo alcun aggiornamento, e installava temporaneamente le dipendenze di build.
