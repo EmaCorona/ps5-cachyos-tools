@@ -2,7 +2,7 @@
 
 ## Ambito di questo repository
 
-Questo repository contiene il framework modulare PS5 e il controller ventole, con documentazione/test relativi. Le istruzioni che nominano moduli del patcher originale si applicano soltanto come principi di processo: non copiare né modificare `cleanup.sh`, altri moduli o la pipeline di `ps5-cachy-os-patch`. Il modulo ventole deve rimanere installabile e disinstallabile in autonomia; nuovi moduli devono essere scoperti tramite manifest e non tramite liste hardcoded.
+Questo repository contiene il framework modulare PS5 e i moduli di sistema, grafica, sessione e VRAM presenti nel checkout. Le istruzioni che nominano moduli del patcher originale si applicano soltanto come principi di processo: non copiare né modificare `cleanup.sh`, altri moduli o la pipeline di `ps5-cachy-os-patch`. I moduli presenti devono essere scoperti tramite manifest e non tramite liste hardcoded.
 
 Questo file raccoglie le regole operative condivise per gli agenti AI che analizzano o modificano il repository. Le istruzioni sono organizzate in sezioni indipendenti, così da poterle ampliare nel tempo senza stravolgere la struttura esistente.
 
@@ -80,10 +80,6 @@ Se un modulo non dispone ancora di una scheda documentale, creala in `docs/modul
 ### Requisito di completamento
 
 Una fix è documentata soltanto quando la scheda in `docs/fix/` e la voce in `docs/fix/README.md` sono state aggiunte o aggiornate, la documentazione del modulo interessato è allineata e i riferimenti sono stati verificati. Mantieni il livello di precisione, la struttura e il tono tecnico delle schede già presenti: descrizioni concrete e verificabili, nessuna affermazione non dimostrata e nessun test dichiarato come superato senza averne osservato il risultato.
-
-## Gestione degli errori del controller
-
-Questo repository non contiene la pipeline di patching host né moduli di cleanup del progetto originale. Gli errori del controller ventole devono essere gestiti dai propri artefatti: lock in `/run/ps5-fan`, stato runtime atomico, stato `DEGRADED`, disinstallazione dei soli file di proprietà e test deterministici. Non creare o importare componenti di boot cleanup estranei al controller.
 
 ## Regola per il recovery manuale Steam in `boot-cleanup`
 

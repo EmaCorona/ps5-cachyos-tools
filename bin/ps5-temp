@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-set -u
-BASE=${PS5_FAN_CONFIG_DIR:-/etc/ps5-fan}; STATE=${PS5_FAN_STATE_FILE:-/run/ps5-fan/runtime.state}
-[ "$(id -u)" -eq 0 ] || { echo 'fan: diagnostica richiede privilegi amministrativi (usare sudo ps5-temp)' >&2; exit 1; }
-[ -r "$STATE" ] || STATE=$BASE/runtime.state
-echo '=== PS5 FAN STATUS ==='
-if [ -r "$STATE" ]; then cat "$STATE"; else echo 'state=UNAVAILABLE'; echo 'servizio o hardware non disponibili'; fi

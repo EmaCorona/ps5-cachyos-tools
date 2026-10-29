@@ -51,13 +51,13 @@ core_registry_parse_file() {
     for path in ${data[OWNED_PATHS]-}; do
         [[ "$path" = /* && "$path" != *'..'* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] || { core_log "OWNED_PATHS non valido: $id"; return 1; }
         case "$path" in
-            /|/etc|/usr|/usr/lib|/usr/local|/var|/var/lib|/run|/etc/systemd|/etc/systemd/system|/var/lib/ps5-cachyos-tools|/run/ps5-cachyos-tools|/usr/lib/ps5-cachyos-tools|/usr/lib/ps5-cachyos-tools/core|/usr/lib/ps5-cachyos-tools/modules|/usr/lib/ps5-cachyos-tools/systemd|/usr/lib/ps5-cachyos-tools/bin|/usr/lib/ps5-cachyos-tools/config|/usr/lib/ps5-cachyos-tools/lib|/etc/ps5-cachyos-tools|/etc/ps5-fan|/etc/ps5-fan/profiles|/usr/local/bin|/etc/udev|/etc/udev/rules.d|*/.ps5-cachyos-tools-txn.*)
+            /|/etc|/usr|/usr/lib|/usr/local|/var|/var/lib|/run|/etc/systemd|/etc/systemd/system|/var/lib/ps5-cachyos-tools|/run/ps5-cachyos-tools|/usr/lib/ps5-cachyos-tools|/usr/lib/ps5-cachyos-tools/core|/usr/lib/ps5-cachyos-tools/modules|/usr/lib/ps5-cachyos-tools/systemd|/usr/lib/ps5-cachyos-tools/bin|/usr/lib/ps5-cachyos-tools/config|/usr/lib/ps5-cachyos-tools/lib|/etc/ps5-cachyos-tools|/usr/local/bin|/etc/udev|/etc/udev/rules.d|*/.ps5-cachyos-tools-txn.*)
                 core_log "OWNED_PATHS pericoloso: $id:$path"; return 1;;
         esac
     done
     for path in ${data[TRANSACTION_PATHS]-}; do
         [[ "$path" = /* && "$path" != *'..'* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] || { core_log "TRANSACTION_PATHS non valido: $id"; return 1; }
-        case "$path" in /|/etc|/usr|/usr/lib|/usr/local|/var|/var/lib|/run|/etc/systemd|/etc/systemd/system|/etc/ps5-fan|/etc/ps5-fan/profiles|*/.ps5-cachyos-tools-txn.*) core_log "TRANSACTION_PATHS pericoloso: $id:$path"; return 1;; esac
+        case "$path" in /|/etc|/usr|/usr/lib|/usr/local|/var|/var/lib|/run|/etc/systemd|/etc/systemd/system|*/.ps5-cachyos-tools-txn.*) core_log "TRANSACTION_PATHS pericoloso: $id:$path"; return 1;; esac
     done
     for path in ${data[BOOT_TRANSACTION_PATHS]-}; do
         [[ "$path" = /* && "$path" != / && "$path" != *'..'* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] || { core_log "BOOT_TRANSACTION_PATHS non valido: $id"; return 1; }
@@ -86,7 +86,7 @@ core_registry_validate_owned_paths() {
             [ -n "$path" ] || { core_log "OWNED_PATHS vuoto: $id"; return 1; }
             [[ "$path" = /* && "$path" != *'..'* && "$path" != *$'\n'* ]] || return 1
             case "$path" in
-                /etc|/usr|/usr/lib|/usr/local|/var|/var/lib|/run|/etc/systemd|/etc/systemd/system|/var/lib/ps5-cachyos-tools|/run/ps5-cachyos-tools|/usr/lib/ps5-cachyos-tools|/usr/lib/ps5-cachyos-tools/core|/usr/lib/ps5-cachyos-tools/modules|/usr/lib/ps5-cachyos-tools/systemd|/usr/lib/ps5-cachyos-tools/bin|/usr/lib/ps5-cachyos-tools/config|/usr/lib/ps5-cachyos-tools/lib|/etc/ps5-cachyos-tools|/etc/ps5-fan|/etc/ps5-fan/profiles|/usr/local/bin|/etc/udev|/etc/udev/rules.d|*/.ps5-cachyos-tools-txn.*) return 1;;
+                /etc|/usr|/usr/lib|/usr/local|/var|/var/lib|/run|/etc/systemd|/etc/systemd/system|/var/lib/ps5-cachyos-tools|/run/ps5-cachyos-tools|/usr/lib/ps5-cachyos-tools|/usr/lib/ps5-cachyos-tools/core|/usr/lib/ps5-cachyos-tools/modules|/usr/lib/ps5-cachyos-tools/systemd|/usr/lib/ps5-cachyos-tools/bin|/usr/lib/ps5-cachyos-tools/config|/usr/lib/ps5-cachyos-tools/lib|/etc/ps5-cachyos-tools|/usr/local/bin|/etc/udev|/etc/udev/rules.d|*/.ps5-cachyos-tools-txn.*) return 1;;
             esac
             [ -z "${owners[$path]+x}" ] || { core_log "ownership duplicata: $path"; return 1; }
             owners[$path]=$id

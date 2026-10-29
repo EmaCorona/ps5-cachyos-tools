@@ -123,8 +123,7 @@ selective="$tmp/selective"; mkdir -p "$selective/etc"; printf 'ID=linux\nNAME=fi
 if CORE_TEST_MODE=1 "$ROOT/bin/ps5-cachyos-tools" install --root "$selective" --module boot-cleanup >/dev/null 2>&1 &&
    [ -x "$selective/usr/lib/ps5-cachyos-tools/modules/boot-cleanup/boot.sh" ] &&
    [ -x "$selective/usr/lib/ps5-cachyos-tools/modules/boot-cleanup/recover.sh" ] &&
-   cmp -s "$ROOT/modules/boot-cleanup/recover.sh" "$selective/usr/lib/ps5-cachyos-tools/modules/boot-cleanup/recover.sh" &&
-   [ ! -e "$selective/usr/lib/ps5-cachyos-tools/modules/fan/module.conf" ]; then
+   cmp -s "$ROOT/modules/boot-cleanup/recover.sh" "$selective/usr/lib/ps5-cachyos-tools/modules/boot-cleanup/recover.sh"; then
     ok 'installazione selettiva include recovery helper e solo boot-cleanup'
 else
     no 'installazione selettiva di boot-cleanup ha installato moduli extra o fallito'

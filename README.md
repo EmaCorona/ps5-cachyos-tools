@@ -16,7 +16,6 @@ Modular post-installation, maintenance, and diagnostics framework for **PS5 Linu
 
 The project includes independent modules for system management, graphics sessions, and loader memory configuration:
 
-- **`fan`** — PS5 thermal controller with 15 temperature zones and `low`, `balanced`, and `high` profiles. It runs as a systemd service and reports readiness and degraded states.
 - **`boot-cleanup`** — conservative early-boot task that only removes verified stale Steam artifacts from an explicit allowlist. A separate manual helper normalizes `/tmp/dumps` permissions without deleting its contents.
 - **`kde`, `gamescope`, and `session`** — prepare KDE Plasma Wayland and Gamescope DRM; the `session` supervisor launches KDE by default from a versioned TTY1 boot policy, handles live KDE/Gamescope switches, and falls back to KDE if Gamescope fails.
 - **`vram`** — writes the selected allocation to `vram.txt` on the loader's FAT32 partition. When both configuration files are absent, a new installation defaults to **512 MiB**; valid existing values are preserved, and an explicit value can be selected during installation. Invalid or conflicting configurations fail closed unless an explicit value resolves them.
@@ -45,7 +44,7 @@ sudo ./bin/ps5-cachyos-tools install --root /mnt/ps5-root --boot /mnt/ps5-boot -
 sudo ./bin/ps5-cachyos-tools install --root /mnt/ps5-root --boot /mnt/ps5-boot
 ```
 
-Without `--module`, the installer selects all modules available in the checkout. The dry run validates the target and displays the plan without applying modules. Offline installation copies files and prepares systemd enablement links in the target; it does not run systemd or execute boot tasks on the host. The `fan` service and boot tasks run when the target system starts. Graphics integration files are installed into the target immediately; their normal-phase boot tasks check those artifacts. When a login shell starts on TTY1, the session supervisor selects KDE from the versioned boot policy and supports temporary switching to Gamescope.
+Without `--module`, the installer selects all modules available in the checkout. The dry run validates the target and displays the plan without applying modules. Offline installation copies files and prepares systemd enablement links in the target; it does not run systemd or execute boot tasks on the host. Graphics integration files are installed into the target immediately; their normal-phase boot tasks check those artifacts. When a login shell starts on TTY1, the session supervisor selects KDE from the versioned boot policy and supports temporary switching to Gamescope.
 
 ### Install directly on a running PS5 Linux system (live)
 
@@ -60,11 +59,11 @@ sudo ./bin/ps5-cachyos-tools install --live --boot /boot/efi --dry-run
 sudo ./bin/ps5-cachyos-tools install --live --boot /boot/efi
 ```
 
-The live installer requires administrative privileges and PS5 platform detection. It enables and starts the fan service after successful installation. `boot-cleanup` runs through `ps5-tools-early.service` at a subsequent boot, or can be invoked with `reapply`. KDE, Gamescope, and session tasks validate their artifacts at normal boot; a login shell on TTY1 starts the session supervisor, which launches KDE by default, accepts temporary switches to Gamescope, and falls back to KDE if Gamescope fails. The KDE module does not install Plasma packages; the Gamescope module builds a separate patched package and keeps the distribution's `/usr/bin/gamescope` intact. The framework does not update Steam. The VRAM module writes the selected byte count in hexadecimal to `vram.txt`; when both root and FAT configuration files are absent, a new installation defaults to 512 MiB. Existing valid values are preserved; malformed or conflicting values fail closed unless explicitly resolved. The loader reads that file during a later Linux boot.
+The live installer requires administrative privileges and PS5 platform detection. `boot-cleanup` runs through `ps5-tools-early.service` at a subsequent boot, or can be invoked with `reapply`. KDE, Gamescope, and session tasks validate their artifacts at normal boot; a login shell on TTY1 starts the session supervisor, which launches KDE by default, accepts temporary switches to Gamescope, and falls back to KDE if Gamescope fails. The KDE module does not install Plasma packages; the Gamescope module builds a separate patched package and keeps the distribution's `/usr/bin/gamescope` intact. The framework does not update Steam. The VRAM module writes the selected byte count in hexadecimal to `vram.txt`; when both root and FAT configuration files are absent, a new installation defaults to 512 MiB. Existing valid values are preserved; malformed or conflicting values fail closed unless explicitly resolved. The loader reads that file during a later Linux boot.
 
 ### Selective migration on PS5 Linux kernel 7.2.3
 
-To migrate without installing the `fan` module, select one module per command. `session` resolves its `kde` and `gamescope` dependencies. Use the loader's verified FAT32 mount in place of `/boot/efi` if it differs.
+Select one module per command when a staged migration is needed. `session` resolves its `kde` and `gamescope` dependencies. Use the loader's verified FAT32 mount in place of `/boot/efi` if it differs.
 
 ```bash
 findmnt /boot/efi
@@ -84,10 +83,6 @@ Repeated `--module` options in one invocation are rejected; each selected module
 Pass `--module` to install a specific module and any declared dependencies (`session` also selects `kde` and `gamescope`). The VRAM module requires `--boot`, whether installing live or offline; a full installation includes VRAM and therefore also requires `--boot`. The Gamescope module requires `/usr/bin/python3` in the target system.
 
 ```bash
-# Fan controller only
-sudo ./bin/ps5-cachyos-tools install --live --module fan --dry-run
-sudo ./bin/ps5-cachyos-tools install --live --module fan
-
 # Boot cleanup only
 sudo ./bin/ps5-cachyos-tools install --live --module boot-cleanup
 
@@ -113,11 +108,10 @@ These switches are temporary and require a running supervisor. The compatibility
 ```bash
 sudo ps5-cachyos-tools status --live
 sudo ps5-cachyos-tools check --live
-sudo systemctl status ps5-fan-daemon.service
 sudo journalctl -u ps5-tools-early.service -b --no-pager
 ```
 
-`status` reports installed modules and their recorded state; `check` runs available module checks. The cleanup check may report missing runtime state until the target has completed its first boot task. For fan diagnostics, use `sudo ps5-fan status` and `sudo ps5-temp`.
+`status` reports installed modules and their recorded state; `check` runs available module checks. The cleanup check may report missing runtime state until the target has completed its first boot task.
 
 ## 📁 Project Structure
 
@@ -125,35 +119,27 @@ sudo journalctl -u ps5-tools-early.service -b --no-pager
 .
 ├── AGENT.md
 ├── bin/
-│   ├── ps5-cachyos-tools       # Module framework CLI
-│   ├── ps5-fan                 # Fan controller management CLI
-│   ├── ps5-fan-daemon          # Long-running thermal controller
-│   └── ps5-temp                # Temperature and controller diagnostics
-├── config/
-│   ├── fan.conf
-│   └── profiles/               # low, balanced, and high fan profiles
+│   └── ps5-cachyos-tools       # Module framework CLI
 ├── docs/
 │   ├── architecture.md
 │   ├── module-api.md
 │   ├── e2e/
 │   ├── fix/
-│   └── modules/                # fan, boot-cleanup, KDE, Gamescope, session, and VRAM guides
+│   └── modules/                # boot-cleanup, KDE, Gamescope, session, and VRAM guides
 ├── lib/
-│   ├── core/                   # Discovery, target checks, transactions, state, systemd
-│   └── modules/                # Framework adapters for modules
+│   └── core/                   # Discovery, target checks, transactions, state, systemd
 ├── modules/
 │   ├── _template/              # Example manifest and hook
 │   ├── boot-cleanup/           # Conservative early-boot cleanup task
-│   ├── fan/                    # Fan service installation and runtime hooks
 │   ├── gamescope/              # Gamescope DRM session and diagnostics
 │   ├── kde/                    # KDE Wayland/DRM integration
 │   ├── session/                # TTY1 session selection and switching
 │   └── vram/                   # Loader VRAM configuration task
-├── systemd/                    # Boot runners and fan service
+├── systemd/                    # Boot runners and module services
 └── tests/                      # Hardware-free automated test suites
 ```
 
-Each module is discovered from `modules/<id>/module.conf` and supplies its own lifecycle hooks. `session` automatically selects the `kde` and `gamescope` dependencies; the other modules remain independently selectable. `fan` is a persistent service; `boot-cleanup`, graphics setup, and `vram` are tasks dispatched by the framework at their declared boot phase. The session module installs the TTY1 supervisor that selects KDE by default and supports switching between KDE and Gamescope. See the [module API](docs/module-api.md) before adding a module.
+Each module is discovered from `modules/<id>/module.conf` and supplies its own lifecycle hooks. `session` automatically selects the `kde` and `gamescope` dependencies; the other modules remain independently selectable. `boot-cleanup`, graphics setup, and `vram` are tasks dispatched by the framework at their declared boot phase. The session module installs the TTY1 supervisor that selects KDE by default and supports switching between KDE and Gamescope. See the [module API](docs/module-api.md) before adding a module.
 
 ## 👥 Contributors
 

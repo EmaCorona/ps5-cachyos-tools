@@ -105,10 +105,6 @@ core_service_reapply() {
     core_service_snapshot_state / "$id"
     pre_pid=$(systemctl show -p MainPID --value "$unit" 2>/dev/null || echo 0)
     pre_pid=${pre_pid:-0}
-    if [ "$id" = fan ] && [ -r /run/ps5-fan/runtime.state ]; then
-        pre_cycles=$(awk -F= '$1=="cycles"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || echo 0)
-        pre_instance=$(awk -F= '$1=="instance_id"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || true)
-    fi
     core_state_write "$state_root" "$id" RUNNING "$policy" "$revision" 0 "$boot" || return 1
     systemctl daemon-reload || rc=$?
     [ "$rc" -ne 0 ] || systemctl restart "$unit" || rc=$?
@@ -229,10 +225,6 @@ core_service_module_install() {
         if systemctl is-active --quiet "$unit"; then
             pre_pid=$(systemctl show -p MainPID --value "$unit" 2>/dev/null || echo 0)
             pre_pid=${pre_pid:-0}
-            if [ "$id" = fan ] && [ -r /run/ps5-fan/runtime.state ]; then
-                pre_cycles=$(awk -F= '$1=="cycles"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || echo 0)
-                pre_instance=$(awk -F= '$1=="instance_id"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || true)
-            fi
         fi
         systemctl daemon-reload || return 1
         systemctl enable "$unit" || return 1

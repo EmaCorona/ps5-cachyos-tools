@@ -60,18 +60,6 @@ core_install_module_valid() {
                 unit=${path##*/}; source=$(core_service_source "$repo" "$unit") || return 1
                 [ -f "$root$path" ] && [ ! -L "$root$path" ] && cmp -s -- "$source" "$root$path" || return 1
                 [ "$(stat -c '%a' "$root$path" 2>/dev/null)" = 644 ] || return 1 ;;
-            /usr/lib/ps5-cachyos-tools/fan.sh)
-                source="$repo/lib/modules/fan.sh"; [ -f "$root$path" ] && cmp -s -- "$source" "$root$path" || return 1
-                [ "$(stat -c '%a' "$root$path" 2>/dev/null)" = 755 ] || return 1 ;;
-            /usr/lib/ps5-cachyos-tools/lib/modules/fan.sh)
-                source="$repo/lib/modules/fan.sh"; [ -f "$root$path" ] && cmp -s -- "$source" "$root$path" || return 1
-                [ "$(stat -c '%a' "$root$path" 2>/dev/null)" = 755 ] || return 1 ;;
-            /usr/local/bin/ps5-fan|/usr/local/bin/ps5-fan-daemon|/usr/local/bin/ps5-temp)
-                source="$repo/bin/${path##*/}"; [ -f "$root$path" ] && cmp -s -- "$source" "$root$path" || return 1
-                [ "$(stat -c '%a' "$root$path" 2>/dev/null)" = 755 ] || return 1 ;;
-            /etc/udev/rules.d/99-ps5-fan.rules)
-                source="$repo/systemd/99-ps5-fan.rules"; [ -f "$root$path" ] && cmp -s -- "$source" "$root$path" || return 1
-                [ "$(stat -c '%a' "$root$path" 2>/dev/null)" = 644 ] || return 1 ;;
         esac
     done
     check="$root/usr/lib/ps5-cachyos-tools/modules/$id/check.sh"
@@ -81,7 +69,7 @@ core_install_module_valid() {
         unknown=0
         for path in $(core_registry_field "$id" 10); do
             case "$path" in
-                /etc/systemd/system/*.service|/etc/systemd/system/multi-user.target.wants/*.service|/usr/lib/ps5-cachyos-tools/fan.sh|/usr/lib/ps5-cachyos-tools/lib/modules/fan.sh|/usr/local/bin/*|/etc/udev/rules.d/*) ;;
+                /etc/systemd/system/*.service|/etc/systemd/system/multi-user.target.wants/*.service|/usr/local/bin/*|/etc/udev/rules.d/*) ;;
                 *) unknown=1; break;;
             esac
         done
@@ -90,20 +78,17 @@ core_install_module_valid() {
 }
 
 core_install_body() {
-    local root=$1 repo=$2 module=${3-} moddir id hook path lock_dir target rc core_src fan_src requires_boot order type identity install_disabled readiness_hook runtime_hook post_install_hook post_remove_hook pre_order pre_id
+    local root=$1 repo=$2 module=${3-} moddir id hook path lock_dir target rc core_src requires_boot order type identity install_disabled readiness_hook runtime_hook post_install_hook post_remove_hook pre_order pre_id
     [ -d "$repo/lib/core" ] && core_src="$repo/lib/core" || core_src="$repo/core"
-    [ -f "$repo/lib/modules/fan.sh" ] && fan_src="$repo/lib/modules/fan.sh" || fan_src="$repo/modules/fan.sh"
     CORE_CONFIG_ROOT=${CORE_CONFIG_ROOT:-$root}
     core_target_validate_final "$root" /run/ps5-cachyos-tools/runtime-changed "$root/run/ps5-cachyos-tools/runtime-changed" || return 1
     mkdir -p "$root/run/ps5-cachyos-tools/runtime-changed" || return 1
     CORE_REGISTRY_ROOT="$repo/modules" core_registry_discover "$repo/modules" >/dev/null || return 1
-    for path in /usr /usr/lib /usr/local /usr/local/bin /etc /etc/ps5-fan /etc/systemd /etc/systemd/system /etc/udev /etc/udev/rules.d /var /var/lib /var/lib/ps5-cachyos-tools /run /run/ps5-cachyos-tools; do core_target_assert_parents "$root" "$path" || return 1; done
+    for path in /usr /usr/lib /usr/local /usr/local/bin /etc /etc/systemd /etc/systemd/system /etc/udev /etc/udev/rules.d /var /var/lib /var/lib/ps5-cachyos-tools /run /run/ps5-cachyos-tools; do core_target_assert_parents "$root" "$path" || return 1; done
     core_target_prepare_dir "$root" /usr/lib/ps5-cachyos-tools/core >/dev/null || return 1
     core_target_prepare_dir "$root" /usr/lib/ps5-cachyos-tools/modules >/dev/null || return 1
     core_target_prepare_dir "$root" /usr/lib/ps5-cachyos-tools/systemd >/dev/null || return 1
-    core_target_prepare_dir "$root" /usr/lib/ps5-cachyos-tools/lib/modules >/dev/null || return 1
     core_target_prepare_dir "$root" /usr/lib/ps5-cachyos-tools/bin >/dev/null || return 1
-    core_target_prepare_dir "$root" /usr/lib/ps5-cachyos-tools/config/profiles >/dev/null || return 1
     core_target_prepare_dir "$root" /usr/local/bin >/dev/null || return 1
     core_target_prepare_dir "$root" /etc/systemd/system >/dev/null || return 1
     core_target_prepare_dir "$root" /etc/systemd/system/multi-user.target.wants >/dev/null || return 1
@@ -116,14 +101,6 @@ core_install_body() {
     done
     target=$(core_target_path "$root" /usr/lib/ps5-cachyos-tools/boot-runner) || return 1
     core_install_copy "$core_src/boot-runner.sh" "$target" 755 || return 1
-    if [ -z "$module" ] || [ "$module" = fan ]; then
-        target=$(core_target_path "$root" /usr/lib/ps5-cachyos-tools/modules/fan.sh) || return 1
-        core_install_copy "$fan_src" "$target" 755 || return 1
-        core_install_copy "$fan_src" "$root/usr/lib/ps5-cachyos-tools/lib/modules/fan.sh" 755 || return 1
-        for path in ps5-fan ps5-fan-daemon ps5-temp; do core_install_copy "$repo/bin/$path" "$root/usr/lib/ps5-cachyos-tools/bin/$path" 755 || return 1; done
-        core_install_copy "$repo/config/fan.conf" "$root/usr/lib/ps5-cachyos-tools/config/fan.conf" 644 || return 1
-        for path in "$repo"/config/profiles/*.conf; do [ -f "$path" ] || continue; core_install_copy "$path" "$root/usr/lib/ps5-cachyos-tools/config/profiles/$(basename "$path")" 644 || return 1; done
-    fi
     target=$(core_target_path "$root" /usr/local/bin/ps5-cachyos-tools) || return 1
     core_install_copy "$repo/bin/ps5-cachyos-tools" "$target" 755 || return 1
     core_install_copy "$repo/bin/ps5-cachyos-tools" "$root/usr/lib/ps5-cachyos-tools/bin/ps5-cachyos-tools" 755 || return 1
@@ -131,11 +108,6 @@ core_install_body() {
         [ -f "$path" ] || continue
         core_install_copy "$path" "$root/usr/lib/ps5-cachyos-tools/systemd/$(basename "$path")" 644 || return 1
     done
-    if [ -z "$module" ] || [ "$module" = fan ]; then
-        for path in ps5-fan-daemon.service 99-ps5-fan.rules; do
-            [ -f "$repo/systemd/$path" ] && core_install_copy "$repo/systemd/$path" "$root/usr/lib/ps5-cachyos-tools/systemd/$path" 644 || return 1
-        done
-    fi
     identity="$root/var/lib/ps5-cachyos-tools/install.identity"
     core_target_validate_final "$root" /var/lib/ps5-cachyos-tools/install.identity "$identity" || return 1
     if [ ! -f "$identity" ]; then

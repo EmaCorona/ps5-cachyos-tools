@@ -89,8 +89,8 @@ else
     no 'preflight della dipendenza Gamescope valida ha bloccato Session'
 fi
 if grep -qx 'desktop' <(sed -n 's/^DEFAULT_SESSION=//p' "$root/home/steam/.config/ps5-cachyos-tools/session.conf") && \
-   [ ! -e "$root/usr/lib/ps5-cachyos-tools/modules/fan/module.conf" ] && [ ! -e "$root/usr/lib/ps5-cachyos-tools/modules/boot-cleanup/module.conf" ]; then
-    ok 'prima installazione imposta KDE e non tocca gli altri moduli'
+   [ ! -e "$root/usr/lib/ps5-cachyos-tools/modules/boot-cleanup/module.conf" ]; then
+    ok 'prima installazione imposta KDE e resta selettiva'
 else no 'default KDE o isolamento moduli errato'; fi
 if "$CLI" check --root "$root" > "$tmp/check.log" 2>&1; then ok 'check di KDE, Gamescope e Session'; else cat "$tmp/check.log" >&2; no 'check moduli grafici'; fi
 if grep -q 'steam' "$root/etc/group" && ! grep -q ',steam,steam' "$root/etc/group"; then ok 'gruppi grafici aggiunti senza duplicati'; else no 'gruppi grafici duplicati o assenti'; fi

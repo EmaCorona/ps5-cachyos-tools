@@ -1,5 +1,7 @@
 # Registro fix
 
+- 2026-10-29 — [rimozione del modulo ventole dal checkout](fix-fan-module-removal.md): eliminazione del modulo, degli artefatti standalone e dei riferimenti speciali dal framework e dalla CI.
+
 - 2026-10-29 — [`ea9738987eb2`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/ea9738987eb20594c59f5f258cc5b0dd5d86f48e): [riuso della dipendenza Gamescope già valida](fix-ea9738987eb2-reused-gamescope-dependency-posthook.md): `session` evita la ricompilazione del pacchetto e salta i post-hook della dipendenza non modificata.
 
 - 2026-10-29 — [`ea9738987eb2`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/ea9738987eb20594c59f5f258cc5b0dd5d86f48e): [selezione ripetuta dei moduli nella migrazione 7.2.3](fix-ea9738987eb2-kernel-7.2.3-selective-cli.md): la CLI rifiuta più opzioni `--module` anziché applicare silenziosamente solo l'ultima.

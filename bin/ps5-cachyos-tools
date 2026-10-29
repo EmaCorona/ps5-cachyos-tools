@@ -124,28 +124,7 @@ core_cli_status() {
         active=offline; readiness=not-checked
         if [ "$root" = / ] && [ "$type" = service ]; then
             if systemctl is-active --quiet "$(core_registry_field "$id" 7)" 2>/dev/null; then active=yes; else active=no; fi
-            if [ "$active" = yes ] && [ "$id" = fan ] && [ -r /run/ps5-fan/runtime.state ]; then
-                runtime_state=$(awk -F= '$1=="state"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || true)
-                profile=$(awk -F= '$1=="profile_applied"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || true)
-                pid=$(systemctl show -p MainPID --value ps5-fan-daemon.service 2>/dev/null || true)
-                cycles=$(awk -F= '$1=="cycles"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || true)
-                updated_at=$(awk -F= '$1=="updated_at"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || true)
-                instance_id=$(awk -F= '$1=="instance_id"{print $2; exit}' /run/ps5-fan/runtime.state 2>/dev/null || true)
-                now=$(date +%s)
-                if [ "$pid" -gt 0 ] 2>/dev/null && kill -0 "$pid" 2>/dev/null && [ "$cycles" -ge 1 ] 2>/dev/null && [ "$updated_at" -ge $((now - 300)) ] 2>/dev/null && [ "$updated_at" -le "$now" ] 2>/dev/null && [ -n "$instance_id" ] && [ "$instance_id" != none ]; then
-                    case "$profile" in
-                        low|balanced|high)
-                            case "$runtime_state" in
-                                NORMAL|HEATING|EMERGENCY) readiness=ready ;;
-                                DEGRADED) readiness=degraded ;;
-                                *) readiness=not-ready ;;
-                            esac ;;
-                        *) readiness=not-ready ;;
-                    esac
-                else
-                    readiness=not-ready
-                fi
-            elif [ "$active" = no ]; then readiness=not-running; fi
+            if [ "$active" = no ]; then readiness=not-running; fi
         fi
         printf '%s: installed=%s enabled=%s type=%s policy=%s present=%s active=%s readiness=%s ' "$id" "$installed" "$enabled" "$type" "$policy" "$present" "$active" "$readiness"
         for key in status last_attempt_at completed_at last_boot_id reapply_requested; do value=$(core_state_get "$root" "$key" "$id" 2>/dev/null || true); [ -n "$value" ] && printf '%s=%s ' "$key" "$value"; done
