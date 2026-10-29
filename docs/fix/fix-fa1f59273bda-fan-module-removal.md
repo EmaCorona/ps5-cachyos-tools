@@ -1,5 +1,7 @@
 # Rimozione del modulo ventole dal checkout
 
+Fonte primaria: [commit `fa1f59273bda`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/fa1f59273bdafdc4f94fb9b5fbffa87194eb692b), 29 ottobre 2026.
+
 ## Problema
 
 Il branch conteneva ancora il modulo `fan`, i suoi binari, le configurazioni, le unità systemd e le suite dedicate. Questo manteneva il controller disponibile nella discovery e lasciava riferimenti a file che non appartengono più al perimetro del branch.
