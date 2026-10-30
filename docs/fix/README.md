@@ -1,6 +1,6 @@
 # Registro fix
 
-- 2026-10-30 — [[`3b0f89595ea3`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/3b0f89595ea3b59433ce9c3619aa1a53bc4fd173): [sessione di avvio configurabile e ripristino da TTY secondaria](fix-3b0f89595ea3-configurable-boot-session-and-tty-recovery.md): `session.conf` decide KDE/Gamescope al boot (KDE di default), `steamos-session-select --default/--once` persistono la scelta anche senza supervisore o da `tty2`, ownership `steam:steam` corretta.
+- 2026-10-30 — [`3b0f89595ea3`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/3b0f89595ea3b59433ce9c3619aa1a53bc4fd173): [sessione di avvio configurabile e ripristino da TTY secondaria](fix-3b0f89595ea3-configurable-boot-session-and-tty-recovery.md): `session.conf` decide KDE/Gamescope al boot (KDE di default), `steamos-session-select --default/--once` persistono la scelta anche senza supervisore o da `tty2`, ownership `steam:steam` corretta.
 
 - 2026-10-29 — [`fa1f59273bda`](https://github.com/EmaCorona/ps5-cachyos-tools/commit/fa1f59273bdafdc4f94fb9b5fbffa87194eb692b): [rimozione del modulo ventole dal checkout](fix-fa1f59273bda-fan-module-removal.md), degli artefatti standalone e dei riferimenti speciali dal framework e dalla CI.
 
