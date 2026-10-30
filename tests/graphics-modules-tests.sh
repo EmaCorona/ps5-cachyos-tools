@@ -848,6 +848,26 @@ if bash -c '
     ok 'chiusura ordinata ferma solo steam e lascia vivo il resto del process group'
 else no 'wait_for_gamescope_client_exit non ferma steam o termina altri processi'; fi
 
+# A portal connected to Gamescope must be stopped before the compositor's
+# process group; otherwise it observes a broken Wayland socket on return to KDE.
+cleanup_fn="$tmp/cleanup-gamescope.sh"
+awk '/^cleanup_gamescope\(\) \{/,/^cleanup_kde\(\) \{/ { if ($0 !~ /^cleanup_kde/) print }' "$SUPERVISOR" > "$cleanup_fn"
+if PS5_CLEANUP_TRACE="$tmp/cleanup-trace" bash -c '
+    source "$1"
+    gamescope_pid=123
+    pgid_file="$2"
+    wait_for_gamescope_client_exit() { printf "wait\n" >> "$PS5_CLEANUP_TRACE"; }
+    terminate_process_group() { printf "kill\n" >> "$PS5_CLEANUP_TRACE"; }
+    systemctl() { printf "%s\n" "$*" >> "$PS5_CLEANUP_TRACE"; }
+    cleanup_gamescope
+' _ "$cleanup_fn" "$tmp/unused-gamescope-pgid" &&
+   [ "$(sed -n '1p' "$tmp/cleanup-trace")" = wait ] &&
+   [ "$(sed -n '2p' "$tmp/cleanup-trace")" = '--user stop xdg-desktop-portal.service xdg-desktop-portal-gtk.service' ] &&
+   [ "$(sed -n '3p' "$tmp/cleanup-trace")" = kill ] &&
+   [ "$(sed -n '4p' "$tmp/cleanup-trace")" = '--user reset-failed xdg-desktop-portal.service xdg-desktop-portal-gtk.service' ]; then
+    ok 'portale Gamescope fermato prima del compositor al ritorno a KDE'
+else no 'portale Gamescope terminato dopo la perdita del socket Wayland'; fi
+
 # The wrapper publishes the Gamescope display to systemd --user once sockets exist.
 sync_fn="$tmp/sync-env.sh"
 awk '/^sync_gamescope_activation_environment\(\) \{/,/^sync_env_pid=/ { if ($0 !~ /^sync_env_pid=/) print }' "$ROOT/modules/gamescope/files/gamescope-session-ps5" > "$sync_fn"

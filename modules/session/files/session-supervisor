@@ -390,10 +390,16 @@ cleanup_gamescope() {
     local pid=${1:-${gamescope_pid:-}}
     if [[ $pid =~ ^[1-9][0-9]{0,9}$ ]]; then
         wait_for_gamescope_client_exit "$pid"
+    fi
+    # Portal GTK uses Gamescope's Wayland socket. Stop it while that socket is
+    # still alive, otherwise it exits with Broken pipe during the switch.
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user stop xdg-desktop-portal.service xdg-desktop-portal-gtk.service 2>/dev/null || true
+    fi
+    if [[ $pid =~ ^[1-9][0-9]{0,9}$ ]]; then
         terminate_process_group "$pid"
     fi
     if command -v systemctl >/dev/null 2>&1; then
-        systemctl --user stop xdg-desktop-portal.service xdg-desktop-portal-gtk.service 2>/dev/null || true
         systemctl --user reset-failed xdg-desktop-portal.service xdg-desktop-portal-gtk.service 2>/dev/null || true
         systemctl --user unset-environment WAYLAND_DISPLAY DISPLAY 2>/dev/null || true
     fi
