@@ -113,9 +113,9 @@ if grep -Fq 'KWIN_FORCE_SW_CURSOR=${KWIN_FORCE_SW_CURSOR:-0}' "$root/etc/profile
 else no 'configurazione/propagazione KWIN_FORCE_SW_CURSOR incompleta'; fi
 
 # A module revision change must refresh the helper assets of installed dependencies.
-sed -i 's/^REVISION=3$/REVISION=1/' "$root/usr/lib/ps5-cachyos-tools/modules/gamescope/module.conf"
+sed -i 's/^REVISION=4$/REVISION=1/' "$root/usr/lib/ps5-cachyos-tools/modules/gamescope/module.conf"
 sed -i 's/^REVISION=3$/REVISION=1/' "$root/usr/lib/ps5-cachyos-tools/modules/kde/module.conf"
-sed -i 's/^REVISION=7$/REVISION=4/' "$root/usr/lib/ps5-cachyos-tools/modules/session/module.conf"
+sed -i 's/^REVISION=8$/REVISION=4/' "$root/usr/lib/ps5-cachyos-tools/modules/session/module.conf"
 printf 'stale helper\n' > "$root/usr/local/bin/ps5-cachyos-tools-steam-verify-repair"
 printf 'stale session runtime\n' > "$root/usr/local/libexec/ps5-cachyos-tools/session-common.sh"
 printf 'stale KDE environment\n' > "$root/etc/profile.d/ps5-kde-environment.sh"
@@ -741,6 +741,74 @@ if "$ROOT/modules/gamescope/files/ps5-steam-verify-repair" "$steam_dir" >/dev/nu
    [ ! -e "$steam_dir/package/steam_client_test.installed" ] && [ -f "$steam_dir/appcache/test.bin" ]; then
     ok 'verifica Steam invalida solo il marker non integro e preserva i dati'
 else no 'riparazione Steam tocca dati o non rileva corruzione'; fi
+
+# Live switch latency: the supervisor must not burn fixed delays on exited
+# leaders, must stop KDE units in one batch and must keep a sub-second DRM poll.
+tpg_fn="$tmp/terminate-process-group.sh"
+awk '/^reap_if_zombie\(\) \{/,/^systemd_unit_state\(\) \{/ { if ($0 !~ /^systemd_unit_state/) print }' "$SUPERVISOR" > "$tpg_fn"
+if bash -c '
+    source "$1"
+    setsid sleep 30 & pid=$!
+    sleep 0.2
+    start=$(date +%s%N)
+    terminate_process_group "$pid"
+    elapsed=$(( ($(date +%s%N) - start) / 1000000 ))
+    (( elapsed < 500 )) && ! kill -0 "$pid" 2>/dev/null' _ "$tpg_fn"; then
+    ok 'terminate_process_group raccoglie il leader terminato senza attese fisse'
+else no 'terminate_process_group è lento o non termina il process group'; fi
+if grep -q 'poll=${PS5_SESSION_DRM_POLL_INTERVAL_SEC:-0.1}' "$SUPERVISOR" && \
+   grep -q 'plasma-xdg-desktop-portal-kde.service' "$SUPERVISOR" && \
+   grep -q 'systemctl --user stop "${loaded_units\[@\]}"' "$SUPERVISOR" && \
+   ! grep -q -- '--unset=' "$SUPERVISOR" && \
+   grep -q 'wait_for_gamescope_client_exit' "$SUPERVISOR"; then
+    ok 'supervisore usa poll DRM rapido, stop KDE batch e chiusura ordinata di Steam'
+else no 'ottimizzazioni latenza del supervisore incomplete'; fi
+if grep -q 'sync_gamescope_activation_environment' "$ROOT/modules/gamescope/files/gamescope-session-ps5" && \
+   grep -q 'run_display_mode_detector &' "$ROOT/modules/gamescope/files/gamescope-session-ps5"; then
+    ok 'wrapper Gamescope pubblica DISPLAY a systemd e non blocca sul rilevamento informativo'
+else no 'ottimizzazioni latenza del wrapper Gamescope incomplete'; fi
+
+# wait_for_gamescope_client_exit stops only the steam client of the group.
+wgc_fn="$tmp/wait-gamescope-client.sh"
+awk '/^reap_if_zombie\(\) \{/,/^terminate_process_group\(\) \{/ { if ($0 !~ /^terminate_process_group/) print }' "$SUPERVISOR" > "$wgc_fn"
+awk '/^wait_for_gamescope_client_exit\(\) \{/,/^cleanup_gamescope\(\) \{/ { if ($0 !~ /^cleanup_gamescope/) print }' "$SUPERVISOR" >> "$wgc_fn"
+cp "$(command -v sleep)" "$tmp/steam"
+if bash -c '
+    source "$1"
+    setsid bash -c "\"\$1\" 30 & sleep 30 & wait" _ "$2" & pgid=$!
+    sleep 0.4
+    start=$(date +%s%N)
+    wait_for_gamescope_client_exit "$pgid"
+    elapsed=$(( ($(date +%s%N) - start) / 1000000 ))
+    alive=$(ps -o comm= -g "$pgid" | grep -c "^sleep$")
+    kill -KILL -- "-$pgid" 2>/dev/null
+    (( elapsed < 1500 )) && (( alive >= 1 ))' _ "$wgc_fn" "$tmp/steam"; then
+    ok 'chiusura ordinata ferma solo steam e lascia vivo il resto del process group'
+else no 'wait_for_gamescope_client_exit non ferma steam o termina altri processi'; fi
+
+# The wrapper publishes the Gamescope display to systemd --user once sockets exist.
+sync_fn="$tmp/sync-env.sh"
+awk '/^sync_gamescope_activation_environment\(\) \{/,/^sync_env_pid=/ { if ($0 !~ /^sync_env_pid=/) print }' "$ROOT/modules/gamescope/files/gamescope-session-ps5" > "$sync_fn"
+sync_dir="$tmp/sync-env"
+mkdir -p "$sync_dir/run" "$sync_dir/bin"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/commands"\n' "$sync_dir" > "$sync_dir/bin/systemctl"
+chmod +x "$sync_dir/bin/systemctl"
+python3 - "$sync_dir/run/gamescope-0" "$sync_dir/x0" <<'PY' &
+import socket, sys, time
+socks = []
+for path in sys.argv[1:]:
+    s = socket.socket(socket.AF_UNIX); s.bind(path); socks.append(s)
+time.sleep(5)
+PY
+sock_pid=$!
+sleep 0.5
+if PATH="$sync_dir/bin:$PATH" XDG_RUNTIME_DIR="$sync_dir/run" PS5_X11_UNIX_SOCKET="$sync_dir/x0" bash -c '
+    source "$1"; sync_gamescope_activation_environment $$' _ "$sync_fn" && \
+   grep -q 'set-environment DISPLAY=:0 WAYLAND_DISPLAY=gamescope-0' "$sync_dir/commands" && \
+   grep -q 'reset-failed xdg-desktop-portal-gtk.service' "$sync_dir/commands"; then
+    ok 'wrapper Gamescope pubblica DISPLAY e WAYLAND_DISPLAY a systemd utente'
+else no 'sync_gamescope_activation_environment non pubblica i socket Gamescope'; fi
+kill "$sock_pid" 2>/dev/null || true; wait "$sock_pid" 2>/dev/null || true
 
 printf '%s test superati, %s falliti\n' "$pass" "$fail"
 (( fail == 0 ))

@@ -82,22 +82,34 @@ fi
 [[ "$drm_diagnostics" == 0 || "$drm_diagnostics" == 1 ]] || { log 'PS5_DRM_DIAGNOSTICS deve valere 0 oppure 1'; exit 78; }
 detected_conn='' detected_w='' detected_h='' detected_refresh=''
 detector=${PS5_GAMESCOPE_MODE_DETECTOR:-/usr/local/bin/ps5-cachyos-tools-gamescope-display-mode}
-if [[ -x "$detector" ]]; then
-    detected_mode=$(PS5_GAMESCOPE_DRM_SYSFS_ROOT="$drm_root" PS5_GAMESCOPE_PREFERRED_CONNECTOR="$output_conn" "$detector" 2>>"$log_file") || detected_mode=''
-    IFS=$'\t' read -r detected_w detected_h detected_refresh detected_conn <<< "$detected_mode"
-fi
-if [[ -n "$output_conn" && ! "$detected_w" =~ ^[0-9]{3,5}$ ]]; then
-    log "il connettore configurato non è connesso o non espone modalità valide: $output_conn"
-    exit 71
-fi
-if [[ -n "$output_conn" && -n "$detected_conn" && "$output_conn" != "$detected_conn" ]]; then
-    log "il connettore rilevato ($detected_conn) non coincide con quello configurato ($output_conn)"
-    exit 71
-fi
-if [[ "$detected_w" =~ ^[0-9]{3,5}$ && "$detected_h" =~ ^[0-9]{3,5}$ && "$detected_refresh" =~ ^[0-9]{2,3}$ ]]; then
-    log "milestone=display_mode_candidate connector=$detected_conn ${detected_w}x${detected_h} aspect=${detected_w}:${detected_h} refresh=${detected_refresh} source=DRM-KMS"
+run_display_mode_detector() {
+    if [[ -x "$detector" ]]; then
+        detected_mode=$(PS5_GAMESCOPE_DRM_SYSFS_ROOT="$drm_root" PS5_GAMESCOPE_PREFERRED_CONNECTOR="$output_conn" "$detector" 2>>"$log_file") || detected_mode=''
+        IFS=$'\t' read -r detected_w detected_h detected_refresh detected_conn <<< "$detected_mode"
+    fi
+    if [[ -n "$output_conn" && ! "$detected_w" =~ ^[0-9]{3,5}$ ]]; then
+        log "il connettore configurato non è connesso o non espone modalità valide: $output_conn"
+        exit 71
+    fi
+    if [[ -n "$output_conn" && -n "$detected_conn" && "$output_conn" != "$detected_conn" ]]; then
+        log "il connettore rilevato ($detected_conn) non coincide con quello configurato ($output_conn)"
+        exit 71
+    fi
+    if [[ "$detected_w" =~ ^[0-9]{3,5}$ && "$detected_h" =~ ^[0-9]{3,5}$ && "$detected_refresh" =~ ^[0-9]{2,3}$ ]]; then
+        log "milestone=display_mode_candidate connector=$detected_conn ${detected_w}x${detected_h} aspect=${detected_w}:${detected_h} refresh=${detected_refresh} source=DRM-KMS"
+    else
+        log 'milestone=display_mode_detection_unavailable; Gamescope userà la modalità preferita e hotplug gestiti dal backend DRM'
+    fi
+}
+# With a pinned connector the result gates the launch and must stay
+# synchronous. Without one it is informational only, so it runs in parallel
+# with the Steam manifest check and Gamescope startup.
+detector_pid=''
+if [[ -n "$output_conn" ]]; then
+    run_display_mode_detector
 else
-    log 'milestone=display_mode_detection_unavailable; Gamescope userà la modalità preferita e hotplug gestiti dal backend DRM'
+    run_display_mode_detector &
+    detector_pid=$!
 fi
 if [[ -x "$verify_helper" ]]; then
     helper_start=$(monotonic_ms)
@@ -135,9 +147,50 @@ log_offset=0; [[ -f "$log_file" ]] && log_offset=$(wc -c < "$log_file" 2>/dev/nu
 gamescope_start=$(monotonic_ms)
 log "milestone=gamescope_exec_start output=$output_conn ${output_w}x${output_h} refresh=$refresh"
 log 'avvio del wrapper DRM con Steam in modalità gamepad'
+# Gamescope exports DISPLAY/WAYLAND_DISPLAY only to its Steam child. Publish
+# them to systemd --user and D-Bus once the sockets exist, so socket-activated
+# portals (xdg-desktop-portal-gtk) do not crash-loop on "cannot open display".
+sync_gamescope_activation_environment() {
+    local parent_pid=$1 attempt runtime_dir=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+    local gs_wayland='' wayland_sock
+    command -v systemctl >/dev/null 2>&1 || return 0
+    for attempt in {1..200}; do
+        kill -0 "$parent_pid" 2>/dev/null || return 0
+        gs_wayland=''
+        for wayland_sock in "$runtime_dir"/gamescope-[0-9]*; do
+            [[ -S $wayland_sock && $wayland_sock != *.lock ]] || continue
+            gs_wayland=${wayland_sock##*/}
+            break
+        done
+        if [[ -n $gs_wayland && -S ${PS5_X11_UNIX_SOCKET:-/tmp/.X11-unix/X0} ]]; then
+            systemctl --user set-environment DISPLAY=:0 "WAYLAND_DISPLAY=$gs_wayland" \
+                XDG_CURRENT_DESKTOP=gamescope XDG_SESSION_TYPE=wayland 2>/dev/null || true
+            if command -v dbus-update-activation-environment >/dev/null 2>&1 && [[ -n ${DBUS_SESSION_BUS_ADDRESS:-} ]]; then
+                DISPLAY=:0 WAYLAND_DISPLAY=$gs_wayland XDG_CURRENT_DESKTOP=gamescope XDG_SESSION_TYPE=wayland \
+                    dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE 2>/dev/null || true
+            fi
+            systemctl --user reset-failed xdg-desktop-portal-gtk.service xdg-desktop-portal.service 2>/dev/null || true
+            return 0
+        fi
+        sleep 0.05 || true
+    done
+}
+sync_env_pid=''
+if [[ -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus" || -n ${DBUS_SESSION_BUS_ADDRESS:-} ]]; then
+    sync_gamescope_activation_environment $$ &
+    sync_env_pid=$!
+fi
 "$gamescope" "${args[@]}" -- "$steam" -gamepadui -steamos >> "$log_file" 2>&1
 rc=$?
+if [[ -n $sync_env_pid ]]; then
+    kill "$sync_env_pid" 2>/dev/null || true
+    wait "$sync_env_pid" 2>/dev/null || true
+    command -v systemctl >/dev/null 2>&1 && systemctl --user unset-environment DISPLAY WAYLAND_DISPLAY 2>/dev/null || true
+fi
 gamescope_end=$(monotonic_ms)
+if [[ -n $detector_pid ]]; then
+    wait "$detector_pid" 2>/dev/null || true
+fi
 if [[ $gamescope_start =~ ^[0-9]+$ && $gamescope_end =~ ^[0-9]+$ ]]; then gamescope_elapsed=$((gamescope_end - gamescope_start)); else gamescope_elapsed=unknown; fi
 log "milestone=gamescope_exec_exit exit=$rc elapsed_ms=$gamescope_elapsed"
 if { [[ -f "$console_log" ]] && tail -c +$((console_offset + 1)) "$console_log" 2>/dev/null | grep -Eqi 'Bus error|Segmentation fault|core dumped|crash_[0-9]'; } || \

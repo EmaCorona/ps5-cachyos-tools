@@ -19,7 +19,7 @@ policy_bin="${supervisor_path%/*}/session-policy"
 drm_root=${PS5_DRM_SYSFS_ROOT:-/sys/class/drm}
 drm_device=${PS5_DRM_DEVICE:-/dev/dri/card0}
 timeout=${PS5_SESSION_DRM_READY_TIMEOUT_SEC:-30}
-poll=${PS5_SESSION_DRM_POLL_INTERVAL_SEC:-1}
+poll=${PS5_SESSION_DRM_POLL_INTERVAL_SEC:-0.1}
 stable_needed=${PS5_SESSION_DRM_STABLE_SAMPLES:-3}
 seat_release_timeout=${PS5_SESSION_SEAT_RELEASE_TIMEOUT_SEC:-10}
 gamescope_bin=${PS5_GAMESCOPE_BIN:-/usr/local/libexec/ps5-cachyos-tools/gamescope-session}
@@ -35,7 +35,7 @@ valid_uint() { [[ $1 =~ ^[0-9]{1,4}$ ]]; }
 valid_uint "$timeout" && (( timeout >= 1 && timeout <= 600 )) || timeout=30
 valid_uint "$stable_needed" && (( stable_needed >= 1 && stable_needed <= 10 )) || stable_needed=3
 valid_uint "$seat_release_timeout" && (( seat_release_timeout >= 1 && seat_release_timeout <= 60 )) || seat_release_timeout=10
-[[ $poll =~ ^[0-9]+([.][0-9]{1,2})?$ ]] || poll=1
+[[ $poll =~ ^[0-9]+([.][0-9]{1,2})?$ ]] || poll=0.1
 
 if [[ ${1:-} == --check-config ]]; then
     [[ -x $policy_bin ]] || exit 1
@@ -97,9 +97,9 @@ drm_fingerprint() {
 }
 
 wait_for_drm() {
-    local started now elapsed previous='' fingerprint stable=0
+    local started_ms now_ms elapsed_ms elapsed started_sec=$SECONDS previous='' fingerprint stable=0
     if [[ ${PS5_SESSION_SKIP_DRM_WAIT:-0} == 1 ]]; then ps5_session_log info 'gate DRM saltato per test'; return 0; fi
-    started=$(awk '{print int($1)}' "${PS5_UPTIME_FILE:-/proc/uptime}" 2>/dev/null || date +%s)
+    started_ms=$(ps5_session_monotonic_ms)
     ps5_session_log info "attesa DRM: device=$drm_device timeout=${timeout}s samples=$stable_needed"
     while :; do
         if (( PS5_SESSION_STOP_REQUESTED )) || system_stopping; then return 2; fi
@@ -117,9 +117,15 @@ wait_for_drm() {
         else
             previous=''; stable=0
         fi
-        now=$(awk '{print int($1)}' "${PS5_UPTIME_FILE:-/proc/uptime}" 2>/dev/null || date +%s)
-        elapsed=$((now - started))
-        if (( elapsed >= timeout )); then ps5_session_log error "timeout DRM dopo ${elapsed}s"; return 1; fi
+        now_ms=$(ps5_session_monotonic_ms)
+        if [[ $started_ms =~ ^[0-9]+$ && $now_ms =~ ^[0-9]+$ ]]; then
+            elapsed_ms=$((now_ms - started_ms))
+            elapsed=$((elapsed_ms / 1000))
+        else
+            elapsed=$((SECONDS - started_sec))
+            elapsed_ms=$((elapsed * 1000))
+        fi
+        if (( elapsed_ms >= timeout * 1000 )); then ps5_session_log error "timeout DRM dopo ${elapsed}s"; return 1; fi
         sleep "$poll" || true
     done
 }
@@ -130,7 +136,7 @@ prepare_kde() {
     unset WAYLAND_DISPLAY DISPLAY
     export XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=KDE XDG_SESSION_DESKTOP=KDE KDE_SESSION_VERSION=6
     if command -v systemctl >/dev/null 2>&1; then
-        systemctl --user stop xdg-desktop-portal.service xdg-desktop-portal-gtk.service xdg-desktop-portal-kde.service 2>/dev/null || true
+        systemctl --user stop xdg-desktop-portal.service xdg-desktop-portal-gtk.service plasma-xdg-desktop-portal-kde.service xdg-desktop-portal-kde.service 2>/dev/null || true
         systemctl --user import-environment XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP KDE_SESSION_VERSION KWIN_DRM_PREFER_COLOR_DEPTH KWIN_DRM_NO_DIRECT_SCANOUT KWIN_FORCE_ASSUME_HDR_SUPPORT KWIN_FORCE_SW_CURSOR 2>/dev/null || true
     fi
     if command -v dbus-update-activation-environment >/dev/null 2>&1 && [[ -n ${DBUS_SESSION_BUS_ADDRESS:-} ]]; then
@@ -150,24 +156,34 @@ prepare_kde() {
 clear_kde_environment() {
     local variables=(WAYLAND_DISPLAY DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP KDE_SESSION_VERSION KWIN_DRM_PREFER_COLOR_DEPTH KWIN_DRM_NO_DIRECT_SCANOUT KWIN_FORCE_ASSUME_HDR_SUPPORT KWIN_FORCE_SW_CURSOR)
     if command -v systemctl >/dev/null 2>&1; then systemctl --user unset-environment "${variables[@]}" 2>/dev/null || true; fi
-    if command -v dbus-update-activation-environment >/dev/null 2>&1; then
-        local variable
-        for variable in "${variables[@]}"; do dbus-update-activation-environment --systemd "--unset=$variable" 2>/dev/null || true; done
-    fi
     # Keep the configured KWin overrides in the supervisor for a later KDE
     # launch. The Gamescope child receives them filtered explicitly.
     unset WAYLAND_DISPLAY DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP KDE_SESSION_VERSION
+}
+
+reap_if_zombie() {
+    local pid=$1 state=''
+    [[ $pid =~ ^[1-9][0-9]{0,9}$ ]] || return 0
+    [[ -r "/proc/$pid/stat" ]] || return 0
+    state=$(awk '{ s = $0; sub(/^.*\) /, "", s); print substr(s, 1, 1) }' "/proc/$pid/stat" 2>/dev/null || true)
+    if [[ $state == Z ]]; then
+        wait "$pid" 2>/dev/null || true
+    fi
 }
 
 terminate_process_group() {
     local pid=$1 attempt
     [[ $pid =~ ^[1-9][0-9]{0,9}$ ]] || return 0
     kill -TERM -- "-$pid" 2>/dev/null || true
-    for attempt in {1..10}; do
+    for attempt in {1..20}; do
+        reap_if_zombie "$pid"
         kill -0 -- "-$pid" 2>/dev/null || break
-        sleep 0.1 || true
+        sleep 0.05 || true
     done
-    kill -KILL -- "-$pid" 2>/dev/null || true
+    reap_if_zombie "$pid"
+    if kill -0 -- "-$pid" 2>/dev/null; then
+        kill -KILL -- "-$pid" 2>/dev/null || true
+    fi
     wait "$pid" 2>/dev/null || true
 }
 
@@ -181,7 +197,8 @@ systemd_unit_state() {
 
 stop_kde_units() {
     local unit state load_state stop_rc=0
-    local units=(plasma-workspace-wayland.target plasma-core.target plasma-kwin_wayland.service plasma-plasmashell.service xdg-desktop-portal.service xdg-desktop-portal-kde.service xdg-desktop-portal-gtk.service)
+    local units=(plasma-workspace-wayland.target plasma-core.target plasma-kwin_wayland.service plasma-plasmashell.service xdg-desktop-portal.service plasma-xdg-desktop-portal-kde.service xdg-desktop-portal-kde.service xdg-desktop-portal-gtk.service)
+    local loaded_units=()
     command -v systemctl >/dev/null 2>&1 || return 1
     for unit in "${units[@]}"; do
         state=$(systemctl --user show "$unit" -p LoadState -p ActiveState --value 2>/dev/null) || {
@@ -194,11 +211,18 @@ stop_kde_units() {
             ps5_session_log info "unità KDE opzionale assente, ignorata: $unit"
             continue
         fi
-        systemctl --user stop "$unit" 2>/dev/null || {
-            ps5_session_log warning "systemd non ha arrestato $unit"
-            stop_rc=1
-        }
+        loaded_units+=("$unit")
     done
+    if (( ${#loaded_units[@]} > 0 )); then
+        if ! systemctl --user stop "${loaded_units[@]}" 2>/dev/null; then
+            for unit in "${loaded_units[@]}"; do
+                systemctl --user stop "$unit" 2>/dev/null || {
+                    ps5_session_log warning "systemd non ha arrestato $unit"
+                    stop_rc=1
+                }
+            done
+        fi
+    fi
     return "$stop_rc"
 }
 
@@ -317,10 +341,38 @@ verify_single_user_session() {
     return 0
 }
 
+wait_for_gamescope_client_exit() {
+    local pgid=$1 timeout_sec=${PS5_SESSION_STEAM_SHUTDOWN_TIMEOUT_SEC:-4}
+    local steps step steam_pids
+    [[ $pgid =~ ^[1-9][0-9]{0,9}$ ]] || return 0
+    [[ $timeout_sec =~ ^[0-9]{1,2}$ ]] || timeout_sec=4
+    steps=$((timeout_sec * 20))
+    command -v ps >/dev/null 2>&1 || return 0
+    # Zombies (STAT Z) still report comm=steam but are already gone.
+    steam_pids=$(ps -o pid=,stat=,comm= -g "$pgid" 2>/dev/null | awk '$2 !~ /^Z/ && $3 == "steam" { print $1 }' || true)
+    [[ -n $steam_pids ]] || return 0
+    # shellcheck disable=SC2086
+    kill -TERM $steam_pids 2>/dev/null || true
+    for (( step = 0; step < steps; step++ )); do
+        reap_if_zombie "$pgid"
+        steam_pids=$(ps -o pid=,stat=,comm= -g "$pgid" 2>/dev/null | awk '$2 !~ /^Z/ && $3 == "steam" { print $1 }' || true)
+        [[ -z $steam_pids ]] && break
+        sleep 0.05 || true
+    done
+}
+
 cleanup_gamescope() {
-    command -v systemctl >/dev/null 2>&1 && systemctl --user stop xdg-desktop-portal.service xdg-desktop-portal-gtk.service 2>/dev/null || true
-    [[ ${gamescope_pid:-} =~ ^[1-9][0-9]{0,9}$ ]] || return 0
-    terminate_process_group "$gamescope_pid"
+    local pid=${1:-${gamescope_pid:-}}
+    if [[ $pid =~ ^[1-9][0-9]{0,9}$ ]]; then
+        wait_for_gamescope_client_exit "$pid"
+        terminate_process_group "$pid"
+    fi
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user stop xdg-desktop-portal.service xdg-desktop-portal-gtk.service 2>/dev/null || true
+        systemctl --user reset-failed xdg-desktop-portal.service xdg-desktop-portal-gtk.service 2>/dev/null || true
+        systemctl --user unset-environment WAYLAND_DISPLAY DISPLAY 2>/dev/null || true
+    fi
+    [[ $pid =~ ^[1-9][0-9]{0,9}$ ]] || return 0
     rm -f -- "$pgid_file"
     gamescope_pid=''
 }
