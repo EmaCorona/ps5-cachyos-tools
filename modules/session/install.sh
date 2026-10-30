@@ -31,8 +31,14 @@ copy_asset session-common.sh /usr/local/libexec/ps5-cachyos-tools/session-common
 copy_asset session-supervisor /usr/local/libexec/ps5-cachyos-tools/session-supervisor 755 || exit 1
 copy_asset session-policy /usr/local/libexec/ps5-cachyos-tools/session-policy 755 || exit 1
 
-config="$root/home/steam/.config/ps5-cachyos-tools/session.conf"
+config_parent="$root/home/steam/.config"
+config_dir="$config_parent/ps5-cachyos-tools"
+config="$config_dir/session.conf"
 [ -d "$root/home/steam" ] && [ ! -L "$root/home/steam" ] || exit 1
+[ -d "$config_parent" ] && [ ! -L "$config_parent" ] || exit 1
+[ -d "$config_dir" ] && [ ! -L "$config_dir" ] || exit 1
+ids=$(awk -F: '$1 == "steam" { print $3 ":" $4; exit }' "$root/etc/passwd" 2>/dev/null)
+[[ "$ids" =~ ^[0-9]+:[0-9]+$ ]] || exit 1
 [ ! -e "$config" ] || { [ -f "$config" ] && [ ! -L "$config" ]; } || exit 1
 if [ ! -e "$config" ]; then
     tmp=$(mktemp "$root/home/steam/.config/ps5-cachyos-tools/.session.conf.XXXXXX") || exit 1
@@ -44,8 +50,13 @@ if [ ! -e "$config" ]; then
     fi
     printf 'DEFAULT_SESSION=%s\nNEXT_SESSION=\n' "$default" > "$tmp" || { rm -f -- "$tmp"; exit 1; }
     chmod 0600 "$tmp" && mv -f -- "$tmp" "$config" || { rm -f -- "$tmp"; exit 1; }
-    ids=$(awk -F: '$1 == "steam" { print $3 ":" $4; exit }' "$root/etc/passwd" 2>/dev/null)
-    [[ "$ids" =~ ^[0-9]+:[0-9]+$ ]] || exit 1
-    chown "$ids" "$config" || exit 1
+fi
+# Always repair ownership/modes: steam must be able to rewrite session.conf
+# (steamos-session-select --default) from its own session or a recovery TTY.
+chmod 0700 "$config_dir" && chmod 0600 "$config" || exit 1
+if [ "$(id -u)" -eq 0 ]; then
+    chown "$ids" "$config_parent" "$config_dir" "$config" || exit 1
+else
+    chown "$ids" "$config_dir" "$config" 2>/dev/null || true
 fi
 exit 0

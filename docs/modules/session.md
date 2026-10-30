@@ -2,15 +2,26 @@
 
 Il modulo Session è l'unico orchestratore dell'avvio grafico automatico su TTY1. KDE e Gamescope restano responsabili dei rispettivi ambienti; Session dipende da entrambi, ma installare KDE o Gamescope da soli non attiva l'autologin grafico.
 
-## Policy esclusiva di avvio
+## Selezione configurabile della sessione di avvio
 
-La scelta automatica al boot è definita esclusivamente dal file versionato `modules/session/files/session-policy`, installato come `/usr/local/libexec/ps5-cachyos-tools/session-policy`. La versione del repository seleziona `desktop` (KDE). Per passare a Gamescope, modificare l'output della policy in `gamescope` nel branch e reinstallare/aggiornare il modulo Session. Il supervisore accetta solo `desktop` o `gamescope`; se la policy manca o restituisce un valore invalido, registra l'errore e avvia KDE.
+La sessione scelta al boot è configurabile in `/home/steam/.config/ps5-cachyos-tools/session.conf` (directory `0700`, file `0600`, proprietà `steam:steam`):
 
-`DEFAULT_SESSION`, `NEXT_SESSION`, `~/.config/ps5-next-session` e ogni valore scritto da precedenti versioni di `steamos-session-select` sono legacy: non vengono consultati per decidere il boot. Il file `session.conf` può restare sul sistema per compatibilità con installazioni precedenti, ma non ha autorità sulla sessione automatica.
+```
+DEFAULT_SESSION=desktop   # desktop (KDE Plasma) oppure gamescope
+NEXT_SESSION=             # override one-shot opzionale
+```
 
-La policy repository controlla la sessione iniziale a ogni boot. Dopo l’avvio, il supervisore resta attivo e gestisce il cambio live tra KDE e Gamescope. `steamos-session-select [desktop|gamescope]`, `--default <session>` e `--once <session>` inviano una richiesta volatile al supervisore: avviano la transizione corrente, ma non scrivono `session.conf`, `DEFAULT_SESSION`, `NEXT_SESSION` o la policy. `--default` è mantenuto per compatibilità con i chiamanti legacy e non imposta il default del boot. Senza un supervisore attivo, il comando fallisce e non salva alcuna scelta. Il cambio della sessione predefinita al boot richiede sempre una modifica versionata alla policy e la distribuzione del modulo.
+`/usr/local/libexec/ps5-cachyos-tools/session-policy` risolve la sessione: `NEXT_SESSION` se presente, altrimenti `DEFAULT_SESSION`. **KDE (`desktop`) è il default obbligatorio**: file assente, vuoto, privo di `DEFAULT_SESSION`, con valori sconosciuti, righe non valide o chiavi duplicate (la lettura è transazionale) avviano sempre KDE. `session-supervisor` (su TTY1) resta l'unico responsabile del ciclo di vita grafico (DRM, seat logind, fallback a KDE); `NEXT_SESSION` viene azzerato non appena la sessione richiesta viene effettivamente avviata (al boot o con switch live accettato), quindi vale una sola volta. Un fallback a KDE per errore di Gamescope non modifica `DEFAULT_SESSION`.
 
-Il canale live usa una directory privata sotto `$XDG_RUNTIME_DIR/ps5-cachyos-tools`, un PID file e un file richiesta atomico; il supervisore controlla le richieste ogni 200 ms durante una sessione e durante il polling DRM quando attende Gamescope. Un lock impedisce due supervisori concorrenti. Le richieste non sopravvivono al riavvio e non possono prevalere sulla policy repository al boot. Il supervisore carica i parametri del profilo KDE e li importa nell'ambiente systemd/D-Bus della sessione KDE. Prima di avviare Gamescope rimuove questi parametri dagli ambienti condivisi e li filtra dal processo Gamescope, mantenendoli però nel supervisore per il successivo ritorno a KDE.
+`steamos-session-select`:
+
+- `steamos-session-select [desktop|gamescope]`: switch live tramite il supervisore, senza toccare `session.conf`. Se il supervisore non è attivo, oppure se il comando viene lanciato da una TTY testuale diversa da `tty1` (senza `DISPLAY`/`WAYLAND_DISPLAY`), salva atomicamente `DEFAULT_SESSION` ed esce con `0` (ripristino di emergenza).
+- `--default <session>`: salva `DEFAULT_SESSION` (azzerando `NEXT_SESSION`) e, se il supervisore è attivo, commuta anche live. Senza supervisore non fallisce.
+- `--once <session>`: salva `NEXT_SESSION` mantenendo il default e, se il supervisore è attivo, commuta anche live; il valore viene consumato dal supervisore.
+
+Ripristino da `tty2`: `steamos-session-select --default desktop` (anche con `sudo`: proprietà e permessi dei file restano `steam:steam`). La scrittura usa `session.lock` e un file temporaneo rinominato atomicamente; la directory di runtime mancante in una shell di recovery viene sostituita da `${TMPDIR:-/tmp}/ps5-cachyos-tools-<uid>`. L'installazione (`REVISION=9`) ripara proprietà e permessi di `.config/ps5-cachyos-tools` senza sovrascrivere il contenuto di `session.conf`, conservato anche da `keep-config`.
+
+Il canale live usa una directory privata sotto `$XDG_RUNTIME_DIR/ps5-cachyos-tools`, un PID file e un file richiesta atomico; il supervisore controlla le richieste ogni 200 ms durante una sessione e durante il polling DRM quando attende Gamescope. Un lock impedisce due supervisori concorrenti. Le richieste non sopravvivono al riavvio e non modificano da sole la configurazione persistente. Il supervisore carica i parametri del profilo KDE e li importa nell'ambiente systemd/D-Bus della sessione KDE. Prima di avviare Gamescope rimuove questi parametri dagli ambienti condivisi e li filtra dal processo Gamescope, mantenendoli però nel supervisore per il successivo ritorno a KDE.
 
 ## Avvio e fallback
 

@@ -37,7 +37,24 @@ valid_uint "$stable_needed" && (( stable_needed >= 1 && stable_needed <= 10 )) |
 valid_uint "$seat_release_timeout" && (( seat_release_timeout >= 1 && seat_release_timeout <= 60 )) || seat_release_timeout=10
 [[ $poll =~ ^[0-9]+([.][0-9]{1,2})?$ ]] || poll=0.1
 
+consume_matching_next_session() {
+    # NEXT_SESSION is one-shot: clear it once the requested session is honoured.
+    local chosen=$1
+    ps5_session_read_config "$PS5_SESSION_CONFIG" || return 0
+    if [[ -n $PS5_SESSION_NEXT && $PS5_SESSION_NEXT == "$chosen" ]]; then
+        if ps5_session_write_config "$PS5_SESSION_DEFAULT" ''; then
+            ps5_session_log info "sessione one-shot consumata: $chosen (default=$PS5_SESSION_DEFAULT)"
+        else
+            ps5_session_log warning 'impossibile consumare l override one-shot NEXT_SESSION'
+        fi
+    fi
+    return 0
+}
+
 if [[ ${1:-} == --check-config ]]; then
+    if [[ -e $PS5_SESSION_CONFIG || -L $PS5_SESSION_CONFIG ]]; then
+        ps5_session_read_config "$PS5_SESSION_CONFIG" || exit 1
+    fi
     [[ -x $policy_bin ]] || exit 1
     requested=$("$policy_bin") || exit 1
     [[ $requested == desktop || $requested == gamescope ]]
@@ -50,7 +67,13 @@ if [[ ${1:-} == --session-child ]]; then
     requested=${2:-}
     [[ $requested == desktop || $requested == gamescope ]] || exit 2
 else
-    # The repository policy is the only source for the session chosen on boot.
+    # session-policy resolves the boot session from session.conf (KDE fallback).
+    config_valid=0
+    if ps5_session_read_config "$PS5_SESSION_CONFIG"; then
+        config_valid=1
+    elif [[ -e $PS5_SESSION_CONFIG || -L $PS5_SESSION_CONFIG ]]; then
+        ps5_session_log error 'configurazione sessione invalida; uso KDE come default'
+    fi
     if [[ ! -x $policy_bin ]]; then
         ps5_session_log error "policy sessione assente: $policy_bin; uso KDE come default"
         requested=desktop
@@ -61,6 +84,7 @@ else
             requested=desktop
         else
             ps5_session_log info "policy repository seleziona $requested"
+            (( config_valid )) && consume_matching_next_session "$requested"
         fi
     fi
 fi
@@ -107,6 +131,7 @@ wait_for_drm() {
             if [[ $PS5_SESSION_SWITCH_TARGET != gamescope ]]; then
                 requested=$PS5_SESSION_SWITCH_TARGET
                 ps5_session_log info "richiesta live durante attesa DRM: $requested"
+                consume_matching_next_session "$requested"
                 return 3
             fi
         fi
@@ -518,10 +543,12 @@ run_session_manager() {
                     fi
                     active_pid=''
                     current_target=$switch_target
+                    consume_matching_next_session "$switch_target"
                     session_switched=1
                     break
                 fi
                 ps5_session_log info "richiesta live $switch_target già attiva; nessuna transizione"
+                consume_matching_next_session "$switch_target"
             fi
             finished_pid=''
             sleep 0.2 8>&- & tick_pid=$!

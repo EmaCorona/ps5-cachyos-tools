@@ -17,7 +17,7 @@ Modular post-installation, maintenance, and diagnostics framework for **PS5 Linu
 The project includes independent modules for system management, graphics sessions, and loader memory configuration:
 
 - **`boot-cleanup`** — conservative early-boot task that only removes verified stale Steam artifacts from an explicit allowlist. A separate manual helper normalizes `/tmp/dumps` permissions without deleting its contents.
-- **`kde`, `gamescope`, and `session`** — prepare KDE Plasma Wayland and Gamescope DRM; the `session` supervisor launches KDE by default from a versioned TTY1 boot policy, handles live KDE/Gamescope switches, and falls back to KDE if Gamescope fails.
+- **`kde`, `gamescope`, and `session`** — prepare KDE Plasma Wayland and Gamescope DRM; the `session` supervisor launches KDE by default from `session.conf` (KDE is the mandatory default), handles live KDE/Gamescope switches, and falls back to KDE if Gamescope fails.
 - **`vram`** — writes the selected allocation to `vram.txt` on the loader's FAT32 partition. When both configuration files are absent, a new installation defaults to **512 MiB**; valid existing values are preserved, and an explicit value can be selected during installation. Invalid or conflicting configurations fail closed unless an explicit value resolves them.
 
 Gamescope selects the connected DRM/KMS mode with the highest resolution (then refresh rate), with optional overrides in `/etc/ps5-cachyos-tools/gamescope.conf`; if `modetest` is unavailable, its mode detector uses 60 Hz as a fallback. KDE selects from KScreen/EDID modes at desktop startup. Detection alone does not guarantee a working HDMI signal or a correctly scaled Steam UI.
@@ -101,7 +101,7 @@ steamos-session-select gamescope
 steamos-session-select desktop
 ```
 
-These switches are temporary and require a running supervisor. The compatibility options `--default` and `--once` also request only a live switch: **neither changes the next boot**. The initial session is selected exclusively by `modules/session/files/session-policy` (installed at `/usr/local/libexec/ps5-cachyos-tools/session-policy`), which currently selects KDE. To make Gamescope the boot default, change that versioned policy to output `gamescope` and reinstall the `session` module. The project does not configure TTY1 autologin itself; see the [session module documentation](docs/modules/session.md).
+`steamos-session-select <session>` switches live through the running supervisor. `--default <session>` persists `DEFAULT_SESSION` in `~/.config/ps5-cachyos-tools/session.conf` (and also switches live when the supervisor runs); `--once <session>` sets a one-shot `NEXT_SESSION` consumed at the next start. From another TTY (e.g. `tty2`) or without a supervisor the command never fails: it saves the boot default for recovery, e.g. `steamos-session-select --default desktop`. Missing or invalid configuration always boots KDE. The project does not configure TTY1 autologin itself; see the [session module documentation](docs/modules/session.md).
 
 ### Inspect the installation
 

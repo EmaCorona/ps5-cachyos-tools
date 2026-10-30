@@ -1,3 +1,14 @@
 #!/usr/bin/env bash
-# Repository-owned boot policy. Change this value to `gamescope` to boot SteamOS UI.
+# Boot policy resolver: session.conf (NEXT_SESSION, then DEFAULT_SESSION) decides;
+# anything missing or invalid falls back to KDE (`desktop`).
+set -u
+common=${PS5_SESSION_COMMON:-/usr/local/libexec/ps5-cachyos-tools/session-common.sh}
+if [[ -f "$common" && ! -L "$common" ]]; then
+    # shellcheck source=/dev/null
+    source "$common"
+    if ps5_session_read_config "$PS5_SESSION_CONFIG"; then
+        printf '%s\n' "${PS5_SESSION_NEXT:-$PS5_SESSION_DEFAULT}"
+        exit 0
+    fi
+fi
 printf '%s\n' 'desktop'

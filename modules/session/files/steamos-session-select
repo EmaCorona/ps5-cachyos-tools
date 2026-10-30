@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
 set -u
+if (( EUID == 0 )); then
+    # The config and runtime trees belong to steam. Drop privileges before
+    # opening any of their files so sudo cannot follow a user-controlled
+    # symlink as root (including lock, IPC, config, or log paths).
+    command -v runuser >/dev/null 2>&1 || {
+        printf 'runuser non disponibile: impossibile eseguire il selettore come steam in sicurezza\n' >&2
+        exit 1
+    }
+    exec runuser -u steam -- env \
+        -u XDG_CONFIG_HOME -u XDG_RUNTIME_DIR \
+        -u PS5_SESSION_CONFIG -u PS5_SESSION_RUNTIME \
+        -u PS5_SESSION_CONTROL_DIR -u PS5_SESSION_SWITCH_FILE \
+        -u PS5_SESSION_SUPERVISOR_PID_FILE -u PS5_SESSION_LOG \
+        "$0" "$@"
+fi
 common=${PS5_SESSION_COMMON:-/usr/local/libexec/ps5-cachyos-tools/session-common.sh}
 [[ -f "$common" && ! -L "$common" ]] || { printf 'session-common.sh non disponibile\n' >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -9,21 +24,72 @@ usage() {
     printf 'Uso: steamos-session-select [desktop|plasma|gamescope|gamescope-wayland] | --default <session> | --once <session>\n' >&2
 }
 
-if [[ ${1:-} == --default || ${1:-} == --once ]]; then
-    [[ $# -eq 2 ]] || { usage; exit 2; }
-    target=$2
-else
-    [[ $# -le 1 ]] || { usage; exit 2; }
-    target=${1:-desktop}
-fi
+mode=live
+case "${1:-}" in
+    --default)
+        [[ $# -eq 2 ]] || { usage; exit 2; }
+        mode=default target=$2 ;;
+    --once)
+        [[ $# -eq 2 ]] || { usage; exit 2; }
+        mode=once target=$2 ;;
+    *)
+        [[ $# -le 1 ]] || { usage; exit 2; }
+        target=${1:-desktop} ;;
+esac
 case "$target" in
     desktop|plasma) target=desktop ;;
     gamescope|gamescope-wayland) target=gamescope ;;
     *) usage; exit 2 ;;
 esac
 
-if ! ps5_session_control_request_switch "$target"; then
-    printf 'Supervisore Session non attivo o canale di controllo non disponibile; nessuna modifica al default di boot è stata salvata.\n' >&2
-    exit 1
+# A text login on another TTY is the emergency path: never depend on the
+# supervisor there, always persist the choice.
+is_secondary_tty=0 current_tty=''
+if [[ -z ${WAYLAND_DISPLAY:-} && -z ${DISPLAY:-} && ${PS5_FORCE_TTY1:-0} != 1 ]]; then
+    current_tty=${PS5_CURRENT_TTY:-$(tty 2>/dev/null || true)}
+    if [[ $current_tty == /dev/tty* && $current_tty != /dev/tty1 ]]; then
+        is_secondary_tty=1
+    fi
 fi
-ps5_session_log info "milestone=live_switch_request_accepted target=$target"
+
+save_or_fail() {
+    ps5_session_write_config "$1" "$2" || {
+        printf 'Impossibile salvare la configurazione sessione in %s\n' "$PS5_SESSION_CONFIG" >&2
+        exit 1
+    }
+}
+
+request_live() {
+    if ps5_session_control_request_switch "$target"; then
+        ps5_session_log info "milestone=live_switch_request_accepted target=$target"
+        return 0
+    fi
+    return 1
+}
+
+case "$mode" in
+    default)
+        save_or_fail "$target" ''
+        ps5_session_log info "milestone=default_session_updated target=$target"
+        request_live || printf 'Supervisore Session non attivo; sessione predefinita di avvio impostata a %s per il prossimo boot.\n' "$target" >&2
+        ;;
+    once)
+        old_default=desktop
+        if ps5_session_read_config "$PS5_SESSION_CONFIG"; then old_default=$PS5_SESSION_DEFAULT; fi
+        save_or_fail "$old_default" "$target"
+        ps5_session_log info "milestone=once_session_updated target=$target default=$old_default"
+        request_live || printf 'Supervisore Session non attivo; sessione one-shot %s salvata per il prossimo boot (default=%s).\n' "$target" "$old_default" >&2
+        ;;
+    live)
+        if (( is_secondary_tty )); then
+            save_or_fail "$target" ''
+            ps5_session_log info "milestone=emergency_tty_default_updated target=$target tty=${current_tty:-unknown}"
+            request_live || printf 'Supervisore Session non attivo; sessione predefinita di avvio impostata a %s per il prossimo boot.\n' "$target" >&2
+        elif ! request_live; then
+            save_or_fail "$target" ''
+            ps5_session_log info "milestone=offline_default_session_saved target=$target"
+            printf 'Supervisore Session non attivo; sessione predefinita di avvio impostata a %s per il prossimo boot.\n' "$target" >&2
+        fi
+        ;;
+esac
+exit 0

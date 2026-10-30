@@ -3,6 +3,12 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d /tmp/ps5-graphics-modules.XXXXXX)
 trap 'rm -rf -- "$tmp"' EXIT
+# Never touch the real host session state, logs or supervisor.
+mkdir -p "$tmp/isolated-home/.config/ps5-cachyos-tools" "$tmp/isolated-run"
+export HOME="$tmp/isolated-home"
+export XDG_RUNTIME_DIR="$tmp/isolated-run"
+export PS5_CURRENT_TTY=/dev/tty1
+unset XDG_CONFIG_HOME PS5_SESSION_CONFIG PS5_SESSION_RUNTIME PS5_SESSION_LOG WAYLAND_DISPLAY DISPLAY
 mkdir -p "$tmp/fake-gamescope-scripts"
 export PS5_GAMESCOPE_SCRIPT_PATH="$tmp/fake-gamescope-scripts"
 pass=0 fail=0
@@ -92,6 +98,15 @@ if grep -qx 'desktop' <(sed -n 's/^DEFAULT_SESSION=//p' "$root/home/steam/.confi
    [ ! -e "$root/usr/lib/ps5-cachyos-tools/modules/boot-cleanup/module.conf" ]; then
     ok 'prima installazione imposta KDE e resta selettiva'
 else no 'default KDE o isolamento moduli errato'; fi
+session_config_dir="$root/home/steam/.config/ps5-cachyos-tools"
+session_config="$session_config_dir/session.conf"
+steam_ids=$(awk -F: '$1 == "steam" { print $3 ":" $4; exit }' "$root/etc/passwd")
+if [ "$(stat -c '%a' "$session_config_dir")" = 700 ] && \
+   [ "$(stat -c '%u:%g' "$session_config_dir")" = "$steam_ids" ] && \
+   [ "$(stat -c '%a' "$session_config")" = 600 ] && \
+   [ "$(stat -c '%u:%g' "$session_config")" = "$steam_ids" ]; then
+    ok 'directory session e session.conf hanno permessi restrittivi e ownership steam:steam'
+else no 'ownership o permessi directory session non corretti'; fi
 if "$CLI" check --root "$root" > "$tmp/check.log" 2>&1; then ok 'check di KDE, Gamescope e Session'; else cat "$tmp/check.log" >&2; no 'check moduli grafici'; fi
 if grep -q 'steam' "$root/etc/group" && ! grep -q ',steam,steam' "$root/etc/group"; then ok 'gruppi grafici aggiunti senza duplicati'; else no 'gruppi grafici duplicati o assenti'; fi
 if [ -x "$root/usr/local/libexec/ps5-cachyos-tools/gamescope-session" ] && \
@@ -115,7 +130,7 @@ else no 'configurazione/propagazione KWIN_FORCE_SW_CURSOR incompleta'; fi
 # A module revision change must refresh the helper assets of installed dependencies.
 sed -i 's/^REVISION=4$/REVISION=1/' "$root/usr/lib/ps5-cachyos-tools/modules/gamescope/module.conf"
 sed -i 's/^REVISION=3$/REVISION=1/' "$root/usr/lib/ps5-cachyos-tools/modules/kde/module.conf"
-sed -i 's/^REVISION=8$/REVISION=4/' "$root/usr/lib/ps5-cachyos-tools/modules/session/module.conf"
+sed -i 's/^REVISION=[0-9][0-9]*$/REVISION=4/' "$root/usr/lib/ps5-cachyos-tools/modules/session/module.conf"
 printf 'stale helper\n' > "$root/usr/local/bin/ps5-cachyos-tools-steam-verify-repair"
 printf 'stale session runtime\n' > "$root/usr/local/libexec/ps5-cachyos-tools/session-common.sh"
 printf 'stale KDE environment\n' > "$root/etc/profile.d/ps5-kde-environment.sh"
@@ -248,12 +263,25 @@ session_runtime="$tmp/selector/run"
 mkdir -p "${session_config%/*}"
 printf 'DEFAULT_SESSION=gamescope\nNEXT_SESSION=gamescope\n' > "$session_config"
 command_trace="$tmp/selector/commands"
-if ! PS5_COMMAND_TRACE="$command_trace" PS5_SESSION_CONFIG="$session_config" PS5_SESSION_RUNTIME="$session_runtime" \
-   PS5_SESSION_COMMON="$COMMON" PATH="$fakebin:$PATH" "$SELECT" --default desktop >/dev/null 2>&1 && \
-   grep -qx 'DEFAULT_SESSION=gamescope' "$session_config" && grep -qx 'NEXT_SESSION=gamescope' "$session_config" && \
-   [ ! -s "$command_trace" ]; then
-    ok 'selettore live senza supervisore fallisce senza modificare il default di boot'
-else no 'selettore senza supervisore ha modificato config o processi'; fi
+select_offline() { PS5_COMMAND_TRACE="$command_trace" PS5_SESSION_CONFIG="$session_config" PS5_SESSION_RUNTIME="$session_runtime" \
+    PS5_SESSION_LOG="$tmp/selector/session.log" PS5_SESSION_COMMON="$COMMON" PATH="$fakebin:$PATH" "$SELECT" "$@" >/dev/null 2>&1; }
+if select_offline --default desktop && \
+   grep -qx 'DEFAULT_SESSION=desktop' "$session_config" && grep -qx 'NEXT_SESSION=' "$session_config" && \
+   select_offline --once gamescope && \
+   grep -qx 'DEFAULT_SESSION=desktop' "$session_config" && grep -qx 'NEXT_SESSION=gamescope' "$session_config" && \
+   select_offline gamescope && \
+   grep -qx 'DEFAULT_SESSION=gamescope' "$session_config" && grep -qx 'NEXT_SESSION=' "$session_config" && \
+   PS5_CURRENT_TTY=/dev/tty2 select_offline desktop && \
+   grep -qx 'DEFAULT_SESSION=desktop' "$session_config" && grep -qx 'NEXT_SESSION=' "$session_config" && \
+   [ "$(stat -c '%a' "$session_config")" = 600 ] && \
+   ! select_offline bogus && [ ! -s "$command_trace" ]; then
+    ok 'selettore senza supervisore o da TTY secondaria aggiorna atomicamente session.conf senza toccare processi'
+else no 'selettore offline/TTY secondaria ha fallito o invocato processi esterni'; fi
+if grep -q 'runuser -u steam -- env' "$SELECT" && \
+   grep -q -- '-u XDG_CONFIG_HOME -u XDG_RUNTIME_DIR' "$SELECT" && \
+   grep -q -- '-u PS5_SESSION_CONFIG -u PS5_SESSION_RUNTIME' "$SELECT"; then
+    ok 'invocazione sudo scende a steam e usa config/runtime dell’utente target'
+else no 'invocazione root non isola l’ambiente config/runtime'; fi
 
 plasma="$tmp/startplasma-wayland"
 cat > "$plasma" <<'EOF'
@@ -273,10 +301,15 @@ exit "${FAKE_GAMESCOPE_RC:-0}"
 EOF
 chmod 0755 "$plasma" "$gamescope_mock"
 
+sel_in() {
+    local d=$1; shift
+    HOME="$d/home" PS5_SESSION_LOG="$d/home/session.log" PS5_SESSION_RUNTIME="$d/run" PS5_SESSION_COMMON="$COMMON" "$SELECT" "$@" >/dev/null 2>&1
+}
+
 # Live switching is transient and keeps the repository boot policy unchanged.
 live="$tmp/live-switch"
 mkdir -p "$live/home" "$live/run" "$live/home/.config/ps5-cachyos-tools"
-printf 'DEFAULT_SESSION=desktop\nNEXT_SESSION=gamescope\n' > "$live/home/.config/ps5-cachyos-tools/session.conf"
+printf 'DEFAULT_SESSION=desktop\nNEXT_SESSION=\n' > "$live/home/.config/ps5-cachyos-tools/session.conf"
 cp "$live/home/.config/ps5-cachyos-tools/session.conf" "$live/session.conf.expected"
 cp "$SUPERVISOR" "$live/home/session-supervisor"
 cp "$ROOT/modules/session/files/session-policy" "$live/home/session-policy"
@@ -301,17 +334,27 @@ live_ok=1
 wait_for_trace plasma || live_ok=0
 if PS5_SESSION_RUNTIME="$live/run" PS5_SESSION_COMMON="$COMMON" PS5_SESSION_LOG="$live/home/duplicate.log" \
    PS5_SESSION_SUPERVISOR=1 "$live/home/session-supervisor" >/dev/null 2>&1; then live_ok=0; fi
-PS5_SESSION_RUNTIME="$live/run" PS5_SESSION_COMMON="$COMMON" "$SELECT" --default gamescope >/dev/null 2>&1 || live_ok=0
+sel_in "$live" gamescope || live_ok=0
 for _ in {1..100}; do [[ -f "$live/trace" ]] && (( $(grep -xc gamescope "$live/trace") >= 1 )) && break; sleep 0.05; done
 [[ -f "$live/trace" ]] && (( $(grep -xc gamescope "$live/trace") >= 1 )) || live_ok=0
-PS5_SESSION_RUNTIME="$live/run" PS5_SESSION_COMMON="$COMMON" "$SELECT" --once desktop >/dev/null 2>&1 || live_ok=0
+sel_in "$live" desktop || live_ok=0
 for _ in {1..100}; do [[ -f "$live/trace" ]] && (( $(grep -xc plasma "$live/trace") >= 2 )) && break; sleep 0.05; done
 [[ -f "$live/trace" ]] && (( $(grep -xc plasma "$live/trace") >= 2 )) || live_ok=0
 "$live/home/session-policy" | grep -qx desktop || live_ok=0
 cmp -s "$live/session.conf.expected" "$live/home/.config/ps5-cachyos-tools/session.conf" || live_ok=0
+live_conf="$live/home/.config/ps5-cachyos-tools/session.conf"
+sel_in "$live" --default gamescope || live_ok=0
+for _ in {1..100}; do (( $(grep -xc gamescope "$live/trace") >= 2 )) && break; sleep 0.05; done
+(( $(grep -xc gamescope "$live/trace") >= 2 )) || live_ok=0
+grep -qx 'DEFAULT_SESSION=gamescope' "$live_conf" && grep -qx 'NEXT_SESSION=' "$live_conf" || live_ok=0
+sel_in "$live" --once desktop || live_ok=0
+for _ in {1..100}; do (( $(grep -xc plasma "$live/trace") >= 3 )) && break; sleep 0.05; done
+(( $(grep -xc plasma "$live/trace") >= 3 )) || live_ok=0
+for _ in {1..40}; do grep -qx 'NEXT_SESSION=' "$live_conf" && break; sleep 0.05; done
+grep -qx 'DEFAULT_SESSION=gamescope' "$live_conf" && grep -qx 'NEXT_SESSION=' "$live_conf" || live_ok=0
 grep -q 'systemctl --user import-environment .*KWIN_FORCE_SW_CURSOR' "$live/commands" 2>/dev/null || live_ok=0
 grep -q 'systemctl --user unset-environment .*KWIN_FORCE_SW_CURSOR' "$live/commands" 2>/dev/null || live_ok=0
-printf '24|1|0|1\nunset|unset|unset|unset\n24|1|0|1\n' > "$live/env-trace.expected"
+printf '24|1|0|1\nunset|unset|unset|unset\n24|1|0|1\nunset|unset|unset|unset\n24|1|0|1\n' > "$live/env-trace.expected"
 cmp -s "$live/env-trace.expected" "$live/env-trace" || live_ok=0
 grep -q 'unità KDE opzionale assente, ignorata: xdg-desktop-portal-kde.service' "$live/home/session.log" 2>/dev/null || live_ok=0
 ! grep -q 'systemctl --user stop xdg-desktop-portal-kde.service' "$live/commands" 2>/dev/null || live_ok=0
@@ -391,7 +434,7 @@ multi_pid=$!
 multi_ok=1
 for _ in {1..100}; do [[ -f "$multi_session/trace" ]] && grep -qx plasma "$multi_session/trace" && break; sleep 0.05; done
 [[ -f "$multi_session/trace" ]] && grep -qx plasma "$multi_session/trace" || multi_ok=0
-if PS5_SESSION_RUNTIME="$multi_session/run" PS5_SESSION_COMMON="$COMMON" "$SELECT" --once gamescope >/dev/null 2>&1; then :; else multi_ok=0; fi
+if sel_in "$multi_session" --once gamescope; then :; else multi_ok=0; fi
 for _ in {1..100}; do grep -q 'sessione KDE lasciata attiva' "$multi_session/home/session.log" 2>/dev/null && break; sleep 0.05; done
 grep -q 'sessione KDE lasciata attiva' "$multi_session/home/session.log" 2>/dev/null || multi_ok=0
 grep -qx plasma "$multi_session/trace" 2>/dev/null || multi_ok=0
@@ -415,7 +458,7 @@ PS5_SESSION_RUNTIME="$multi_session/run" PS5_SESSION_COMMON="$COMMON" PS5_SESSIO
 partial_pid=$!
 for _ in {1..100}; do [[ -f "$multi_session/trace" ]] && grep -qx plasma "$multi_session/trace" && break; sleep 0.05; done
 [[ -f "$multi_session/trace" ]] && grep -qx plasma "$multi_session/trace" || partial_sessions_ok=0
-if PS5_SESSION_RUNTIME="$multi_session/run" PS5_SESSION_COMMON="$COMMON" "$SELECT" --once gamescope >/dev/null 2>&1; then :; else partial_sessions_ok=0; fi
+if sel_in "$multi_session" --once gamescope; then :; else partial_sessions_ok=0; fi
 for _ in {1..100}; do grep -q 'elenco sessioni logind incompleto rispetto' "$multi_session/home/session.log" 2>/dev/null && break; sleep 0.05; done
 grep -q 'elenco sessioni logind incompleto rispetto' "$multi_session/home/session.log" 2>/dev/null || partial_sessions_ok=0
 grep -qx gamescope "$multi_session/trace" 2>/dev/null && partial_sessions_ok=0
@@ -438,7 +481,7 @@ PS5_SESSION_RUNTIME="$multi_session/run" PS5_SESSION_COMMON="$COMMON" PS5_SESSIO
 empty_sessions_pid=$!
 for _ in {1..100}; do [[ -f "$multi_session/trace" ]] && grep -qx plasma "$multi_session/trace" && break; sleep 0.05; done
 [[ -f "$multi_session/trace" ]] && grep -qx plasma "$multi_session/trace" || empty_sessions_ok=0
-if PS5_SESSION_RUNTIME="$multi_session/run" PS5_SESSION_COMMON="$COMMON" "$SELECT" --once gamescope >/dev/null 2>&1; then :; else empty_sessions_ok=0; fi
+if sel_in "$multi_session" --once gamescope; then :; else empty_sessions_ok=0; fi
 for _ in {1..100}; do grep -q 'elenco sessioni logind vuoto o incompleto' "$multi_session/home/session.log" 2>/dev/null && break; sleep 0.05; done
 grep -q 'elenco sessioni logind vuoto o incompleto' "$multi_session/home/session.log" 2>/dev/null || empty_sessions_ok=0
 grep -qx gamescope "$multi_session/trace" 2>/dev/null && empty_sessions_ok=0
@@ -469,7 +512,7 @@ drm_pid=$!
 for _ in {1..100}; do grep -q 'attesa DRM' "$drm_switch/home/session.log" 2>/dev/null && break; sleep 0.05; done
 drm_ok=1
 grep -q 'attesa DRM' "$drm_switch/home/session.log" 2>/dev/null || drm_ok=0
-PS5_SESSION_RUNTIME="$drm_switch/run" PS5_SESSION_COMMON="$COMMON" "$SELECT" --once desktop >/dev/null 2>&1 || drm_ok=0
+sel_in "$drm_switch" --once desktop || drm_ok=0
 wait "$drm_pid" 2>/dev/null || true
 grep -qx plasma "$drm_switch/trace" 2>/dev/null || drm_ok=0
 if (( drm_ok )); then ok 'richiesta live KDE viene rilevata durante l’attesa DRM'; else cat "$drm_switch/home/supervisor.out" "$drm_switch/home/session.log" "$drm_switch/trace" >&2 2>/dev/null; no 'richiesta durante attesa DRM'; fi
@@ -491,7 +534,7 @@ run_supervisor() {
     PS5_SESSION_CONFIG="$config" PS5_SESSION_RUNTIME="$home/run" PS5_SESSION_COMMON="$COMMON" \
       PS5_SESSION_LOG="$home/session.log" PS5_FALLBACK_LOG="$home/fallback.log" PS5_ALERT_FILE="$home/alert.txt" \
       PS5_PLASMA_BIN="$plasma" PS5_GAMESCOPE_BIN="$gamescope_mock" PS5_TRACE="$trace" HOME="$home" \
-      PS5_FORCE_TTY1=1 PATH="$fakebin:$PATH" "$home/session-supervisor"
+      PS5_FORCE_TTY1=1 PS5_SESSION_SKIP_DRM_WAIT=1 FAKE_GAMESCOPE_RC=0 PATH="$fakebin:$PATH" "$home/session-supervisor"
 }
 
 startup="$tmp/startup"
@@ -511,14 +554,33 @@ if run_supervisor "$invalid_startup/session.conf" "$invalid_startup/trace" "$inv
     ok 'configurazione invalida legacy non cambia la policy KDE'
 else no 'configurazione invalida legacy ha cambiato policy'; fi
 
-stale_choice="$tmp/stale-choice"
-mkdir -p "$stale_choice/home" "$stale_choice/run"
-printf 'DEFAULT_SESSION=gamescope\nNEXT_SESSION=gamescope\n' > "$stale_choice/session.conf"
-if run_supervisor "$stale_choice/session.conf" "$stale_choice/trace" "$stale_choice/home" >/dev/null 2>&1 && \
-   grep -qx plasma "$stale_choice/trace" && ! grep -q gamescope "$stale_choice/trace" && \
-   grep -q 'policy repository seleziona desktop' "$stale_choice/home/session.log"; then
-    ok 'policy repository KDE prevale su DEFAULT_SESSION e NEXT_SESSION legacy'
-else no 'configurazione legacy ha prevalso sulla policy KDE'; fi
+configured_gamescope="$tmp/configured-gamescope"
+mkdir -p "$configured_gamescope/home" "$configured_gamescope/run"
+printf 'DEFAULT_SESSION=gamescope\nNEXT_SESSION=\n' > "$configured_gamescope/session.conf"
+if run_supervisor "$configured_gamescope/session.conf" "$configured_gamescope/trace" "$configured_gamescope/home" >/dev/null 2>&1 && \
+   grep -qx gamescope "$configured_gamescope/trace" && \
+   grep -qx 'DEFAULT_SESSION=gamescope' "$configured_gamescope/session.conf" && grep -qx 'NEXT_SESSION=' "$configured_gamescope/session.conf"; then
+    ok 'DEFAULT_SESSION=gamescope avvia Gamescope e resta il default di boot'
+else no 'DEFAULT_SESSION=gamescope non applicato al boot'; fi
+
+partial_config="$tmp/partial-config"
+mkdir -p "$partial_config/home" "$partial_config/run"
+printf 'DEFAULT_SESSION=gamescope\nBROKEN=1\n' > "$partial_config/session.conf"
+if run_supervisor "$partial_config/session.conf" "$partial_config/trace" "$partial_config/home" >/dev/null 2>&1 && \
+   grep -qx plasma "$partial_config/trace" && ! grep -q gamescope "$partial_config/trace"; then
+    ok 'configurazione parzialmente corrotta ricade su KDE'
+else no 'configurazione corrotta non ricade su KDE'; fi
+
+one_shot_choice="$tmp/one-shot-choice"
+mkdir -p "$one_shot_choice/home" "$one_shot_choice/run"
+printf 'DEFAULT_SESSION=desktop\nNEXT_SESSION=gamescope\n' > "$one_shot_choice/session.conf"
+if run_supervisor "$one_shot_choice/session.conf" "$one_shot_choice/trace1" "$one_shot_choice/home" >/dev/null 2>&1 && \
+   grep -qx gamescope "$one_shot_choice/trace1" && \
+   grep -qx 'DEFAULT_SESSION=desktop' "$one_shot_choice/session.conf" && grep -qx 'NEXT_SESSION=' "$one_shot_choice/session.conf" && \
+   run_supervisor "$one_shot_choice/session.conf" "$one_shot_choice/trace2" "$one_shot_choice/home" >/dev/null 2>&1 && \
+   grep -qx plasma "$one_shot_choice/trace2" && ! grep -q gamescope "$one_shot_choice/trace2"; then
+    ok 'NEXT_SESSION one-shot avvia Gamescope una volta e il boot successivo torna al default'
+else no 'NEXT_SESSION one-shot non consumato correttamente'; fi
 
 for policy_state in missing invalid; do
     policy_case="$tmp/policy-$policy_state"

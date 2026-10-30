@@ -1,0 +1,88 @@
++ set -euo pipefail
++ [[ '' == --namespace ]]
++++ dirname tests/session-selector-rootless-test.sh
+++ cd tests/..
+++ pwd
++ repo=/home/steam/Development/Repository/ps5-cachy-os-tools
+++ id -u
++ [[ 1000 == 1000 ]]
+++ id -g
++ [[ 1000 == 1000 ]]
++ [[ -d /run/user/1000 ]]
++++ id -un
+++ awk -F: -v user=steam '$1 == user { print $2; exit }' /etc/subuid
++ subuid_base=100000
++++ id -un
+++ awk -F: -v user=steam '$1 == user { print $2; exit }' /etc/subgid
++ subgid_base=100000
++ for tool in unshare newuidmap newgidmap setpriv
++ command -v unshare
++ for tool in unshare newuidmap newgidmap setpriv
++ command -v newuidmap
++ for tool in unshare newuidmap newgidmap setpriv
++ command -v newgidmap
++ for tool in unshare newuidmap newgidmap setpriv
++ command -v setpriv
++ [[ 100000 =~ ^[0-9]+$ ]]
++ [[ 100000 =~ ^[0-9]+$ ]]
+++ mktemp -d /tmp/ps5-session-rootless.XXXXXX
++ tmp=/tmp/ps5-session-rootless.qgabTr
++ chmod 0755 /tmp/ps5-session-rootless.qgabTr
++ mkdir -p /tmp/ps5-session-rootless.qgabTr/home/.config/ps5-cachyos-tools /tmp/ps5-session-rootless.qgabTr/runtime /tmp/ps5-session-rootless.qgabTr/foreign-config /tmp/ps5-session-rootless.qgabTr/bin
++ printf 'DEFAULT_SESSION=desktop\nNEXT_SESSION=\n'
++ chmod 0700 /tmp/ps5-session-rootless.qgabTr/home/.config/ps5-cachyos-tools
++ chmod 0600 /tmp/ps5-session-rootless.qgabTr/home/.config/ps5-cachyos-tools/session.conf
++ cp /home/steam/Development/Repository/ps5-cachy-os-tools/modules/session/files/session-common.sh /tmp/ps5-session-rootless.qgabTr/session-common.sh
++ cp /home/steam/Development/Repository/ps5-cachy-os-tools/modules/session/files/steamos-session-select /tmp/ps5-session-rootless.qgabTr/steamos-session-select
++ chmod 0755 /tmp/ps5-session-rootless.qgabTr/steamos-session-select
++ cat
++ chmod 0755 /tmp/ps5-session-rootless.qgabTr/bin/runuser
++ chmod 0700 /tmp/ps5-session-rootless.qgabTr/runtime
++ pid=21112
++ sleep 0.1
++ unshare -U --fork tests/session-selector-rootless-test.sh --namespace /tmp/ps5-session-rootless.qgabTr
++ newuidmap 21112 0 1000 1 1000 100000 1
++ printf 'deny\n'
++ newgidmap 21112 0 1000 1 1000 100000 1
++ touch /tmp/ps5-session-rootless.qgabTr/ready
++ wait 21112
++ tmp=/tmp/ps5-session-rootless.qgabTr
++ mount --make-rprivate /
++ mount --bind /tmp/ps5-session-rootless.qgabTr/home /home/steam
++ mount --bind /tmp/ps5-session-rootless.qgabTr/runtime /run/user/1000
++ chown -R 1000:1000 /home/steam /tmp/ps5-session-rootless.qgabTr/runtime
++ trap cleanup EXIT
++ PATH=/tmp/ps5-session-rootless.qgabTr/bin:/home/steam/.codex/tmp/arg0-linux/codex-arg0KVdzTF:/home/steam/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/usr/local/sbin:/usr/local/bin:/usr/bin:/var/lib/flatpak/exports/bin:/usr/bin/site_perl:/usr/bin/vendor_perl:/usr/bin/core_perl:/home/steam/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/usr/lib/chatgpt/resources
++ HOME=/root
++ XDG_CONFIG_HOME=/tmp/ps5-session-rootless.qgabTr/foreign-config
++ XDG_RUNTIME_DIR=/run/user/0
++ PS5_SESSION_CONFIG=/root/forbidden-session.conf
++ PS5_SESSION_RUNTIME=/run/user/0
++ PS5_SESSION_COMMON=/tmp/ps5-session-rootless.qgabTr/session-common.sh
++ /tmp/ps5-session-rootless.qgabTr/steamos-session-select --default gamescope
+Supervisore Session non attivo; sessione predefinita di avvio impostata a gamescope per il prossimo boot.
++ config=/home/steam/.config/ps5-cachyos-tools/session.conf
++ grep -qx DEFAULT_SESSION=gamescope /home/steam/.config/ps5-cachyos-tools/session.conf
++ grep -qx NEXT_SESSION= /home/steam/.config/ps5-cachyos-tools/session.conf
+++ stat -c %u:%g /home/steam/.config/ps5-cachyos-tools/session.conf
++ [[ 1000:1000 == 1000:1000 ]]
+++ stat -c %a /home/steam/.config/ps5-cachyos-tools/session.conf
++ [[ 600 == 600 ]]
+++ stat -c %u:%g /home/steam/.config/ps5-cachyos-tools
++ [[ 1000:1000 == 1000:1000 ]]
+++ stat -c %a /home/steam/.config/ps5-cachyos-tools
++ [[ 700 == 700 ]]
++ [[ ! -e /tmp/ps5-session-rootless.qgabTr/foreign-config/ps5-cachyos-tools/session.conf ]]
++ [[ ! -e /root/forbidden-session.conf ]]
++ printf '%s\n' 'PASS: root selector dropped to steam, ignored foreign path overrides, and wrote owner 1000:1000 mode 600'
+PASS: root selector dropped to steam, ignored foreign path overrides, and wrote owner 1000:1000 mode 600
++ cleanup
++ setpriv --keep-groups --reuid=1000 --regid=1000 -- python3 -
++ umount /run/user/1000
++ umount /home/steam
++ unlink /tmp/ps5-session-rootless.qgabTr/bin/runuser
++ rmdir /tmp/ps5-session-rootless.qgabTr/home /tmp/ps5-session-rootless.qgabTr/runtime /tmp/ps5-session-rootless.qgabTr/foreign-config /tmp/ps5-session-rootless.qgabTr/bin
++ unlink /tmp/ps5-session-rootless.qgabTr/session-common.sh
++ unlink /tmp/ps5-session-rootless.qgabTr/steamos-session-select
++ unlink /tmp/ps5-session-rootless.qgabTr/ready
++ rmdir /tmp/ps5-session-rootless.qgabTr
